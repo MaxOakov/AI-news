@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import os
 import time
+from datetime import datetime
 import feedparser
 from google import genai
 import asyncio
@@ -21,11 +22,13 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 client = genai.Client()
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# RSS-стрічки для парсингу
-RSS_FEEDS = [
-    # "https://feeds.feedburner.com/ign/games-all"
-    "https://www.vg247.com/feed/news"
-]
+# Читаємо RSS-стрічки для парсингу з файлу rss_feed_links та добавляємо їх в list
+RSS_FEEDS = []
+with open('rss_feed_links.txt', 'r') as f:
+    for line in f:
+        line = line.strip()
+        if line and not line.startswith('#'):
+            RSS_FEEDS.append(line)
 
 # ----------------- Функції -----------------
 def fetch_articles():
@@ -33,17 +36,30 @@ def fetch_articles():
     Завантажує статті з RSS-фідів (до 5 найновіших з кожної).
     Повертає list[dict]: title, link, summary.
     """
-    articles = []
+    latest_article = []
+    latest_time = None
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
-        for entry in feed.entries[:1]:
-            articles.append({
-                "title": entry.title,
-                "link": entry.link,
-                "summary": getattr(entry, 'summary', '')
-            })
-    print("Статті вивантажено...")
-    return articles
+        for entry in feed.entries:
+            # Беремо тільки, якщо є дата публікації
+            if hasattr(entry, 'published_parsed'):
+                entry_time = datetime(*entry.published_parsed[:6])
+                if latest_time is None or entry_time > latest_time:
+                    latest_time = entry_time
+                    latest_article = [{
+                        "title": entry.title,
+                        "link": entry.link,
+                        "summary": getattr(entry, 'summary', ''),
+                        "published": entry_time
+                    }]
+                if not hasattr(entry, 'published_parsed') or not entry.published_parsed:
+                    break
+
+    if latest_article:
+        print(f"Найсвіжіша новина: {entry['title']}")
+    else:
+        print("Немає новин із датами публікації.")
+    return latest_article
 
 
 def generate_news(article):

@@ -25,7 +25,7 @@ async def scheduler_loop():
 
 def start_scheduler():
     # Планування задач кожні 2 години
-    schedule.every(30).seconds.do(job_wrapper)
+    schedule.every(3).hours.do(job_wrapper)
 
     # Запуск scheduler_loop у глобальному loop
     loop.create_task(scheduler_loop())

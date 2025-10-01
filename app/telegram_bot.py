@@ -6,6 +6,8 @@ import asyncio
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-async def send_all(news):
-    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=news, parse_mode="HTML")
-    await asyncio.sleep(1)  # замість time.sleep — щоб не блокувати loop
+async def send_telegram(news: str):
+    try:
+        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=news, parse_mode="HTML")
+    except Exception as e:
+        print(f"⚠️ Помилка при відправці Telegram: {e}")

@@ -8,7 +8,7 @@ from app import loop
 def job_wrapper():
     """Обгортка для schedule: перевіряє час перед запуском job"""
     now = datetime.now().hour
-    if 9 <= now < 24:
+    if 9 < now <= 22:
         print(f"Зараз {now} година. Виконується автоматизатор новин...")
         # job асинхронна → створюємо таск у глобальному loop
         loop.create_task(job())

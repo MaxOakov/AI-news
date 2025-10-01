@@ -13,8 +13,8 @@ Setup Instructions:
 	  pip install -r requirements.txt
 
 3. Configure Settings
-	- Place your custom prompt in a separate file as described in the documentation.
-	- Edit configuration files (such as .env) to add your Gemini API key and Telegram bot token.
+	- Place your custom prompt in a separate file (e.g., prompt.txt) in the project folder. See the section "Custom Prompt Format" below for details.
+	- Edit the `.env` configuration file to add your Gemini API key and Telegram bot token.
 
 4. Run the Bot
 	- Start the bot with:

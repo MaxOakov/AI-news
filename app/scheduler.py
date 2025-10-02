@@ -1,17 +1,27 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import schedule
 from app.job import job
 from app import loop
 
 # ----------------- Планувальник -----------------
+async def job_with_log():
+    """Асинхронний запуск job з повідомленням про наступний запуск."""
+    await job()
+
+    # Обчислюємо час наступного запуску
+    next_time = datetime.now() + timedelta(hours=3)
+    print(f"⏰ Наступний запуск о {next_time.strftime('%H:%M')}")
+
+
+
 def job_wrapper():
     """Обгортка для schedule: перевіряє час перед запуском job"""
     now = datetime.now().hour
-    if 9 < now <= 22:
+    if 9 <= now <= 22:
         print(f"Зараз {now} година. Виконується автоматизатор новин...")
         # job асинхронна → створюємо таск у глобальному loop
-        loop.create_task(job())
+        loop.create_task(job_with_log())
     else:
         print("⏸ Нічний час, задача не виконується.")
 
@@ -24,7 +34,10 @@ async def scheduler_loop():
 
 
 def start_scheduler():
-    # Планування задач кожні 2 години
+    # Запуск при включенні 
+    loop.create_task(job_with_log())
+
+    # Планування задач кожні 3 години
     schedule.every(3).hours.do(job_wrapper)
 
     # Запуск scheduler_loop у глобальному loop

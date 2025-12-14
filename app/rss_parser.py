@@ -28,10 +28,6 @@ def fetch_articles(RSS_FEEDS):
     Завантажує нову статтю, якщо вона новіша за попередню.
     Повертає dict або None.
     """
-    global latest_time
-    newest_article = None
-    newest_time = latest_time
-
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
         for entry in feed.entries:

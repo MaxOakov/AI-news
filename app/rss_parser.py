@@ -1,11 +1,11 @@
 import feedparser
-from datetime import datetime
+import datetime
+from app.mongo import article_exists, create_article
+from pprint import pprint
 
 
 # Створюємо змінні
 RSS_FEEDS = []
-latest_time = None
-
 
 # Читаємо RSS-стрічки для парсингу з файлу rss_feed_links та добавляємо їх в list але без дублювання, бо швидкість обрбки падає
 def reed_rss(): 
@@ -19,75 +19,38 @@ def reed_rss():
     print("Завантажені RSS:", RSS_FEEDS)
     return RSS_FEEDS
 
-
-
-
-# ----------------- Функція витягування статті з rss -----------------
+# ----------------- Початок функції витягування статей з rss -----------------
 def fetch_articles(RSS_FEEDS):
     """
-    Завантажує нову статтю, якщо вона новіша за попередню.
-    Повертає dict або None.
-    """
+    Перевіряє всі RSS-фіди на наявність нових статей.
+    Повертає список нових статей.
+    """ 
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
-        for entry in feed.entries:
+        # limit saved new articles per feed
+        for entry in feed.entries[:3]:  # Перевіряємо лише перші 3 статті у фіді
             if hasattr(entry, 'published_parsed'):
-                entry_time = datetime(*entry.published_parsed[:6])
-
-                if newest_time is None or entry_time > newest_time:
-                    newest_time = entry_time
-                    newest_article = {
+                if article_exists(entry.title) == True:
+                    print(f"Пропускаємо. Стаття '{entry.title}' вже існує в базі даних.")
+                    continue  # Пропускаємо цю статтю, якщо вона вже є в базі даних
+                else:
+                    create_article([{
                         "title": entry.title,
-                        "link": entry.link,
+                        "url": entry.link,
                         "summary": getattr(entry, 'summary', ''),
-                        "published": entry_time
-                    }
+                        "published": datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc),
+                        "is_sent": False
+                       }])
+                    print(f"Збережено нову статтю: '{entry.title}'")
+    return []  # Повертаємо порожній список, якщо немає нових статей
 
-    # Якщо нова стаття знайдена
-    if newest_article:
-        if latest_time is None or newest_article["published"] > latest_time:
-            latest_time = newest_article["published"]
-            print(f"✅ Знайдена нова стаття: {newest_article['title']}")
-            return newest_article
-        else:
-            print("ℹ️ Стаття така ж сама, пропускаємо цей цикл.")
-            return None
 
-    print("Немає нових статей із датами публікації.")
-    return None
+# ----------------- Кінець функції витягування статей з rss -----------------
 
-# def fetch_articles(RSS_FEEDS):
-    """
-    Завантажує найсвіжішу статтю з RSS-фідів
-    Пропускає, якщо дата публікації збігається з останньою
-    """
-    global last_published_time
-    latest_article = None
-    latest_time = None
+# reed_rss()  # Викликаємо функцію для початкового завантаження RSS-стрічок
+# pprint(RSS_FEEDS)  # Тестовий виклик функції для отримання всіх статей
+# articles = fetch_articles(RSS_FEEDS)
+# for article in articles:
+#     pprint(article['title'])
+#     pprint(article['published'])
 
-    for url in RSS_FEEDS:
-        feed = feedparser.parse(url)
-        for entry in feed.entries:
-            if hasattr(entry, 'published_parsed'):
-                entry_time = datetime(*entry.published_parsed[:6])
-                if latest_time is None or entry_time > latest_time:
-                    latest_time = entry_time
-                    latest_article = {
-                        "title": entry.title,
-                        "link": entry.link,
-                        "summary": getattr(entry, 'summary', ''),
-                        "published": entry_time
-                    }
-
-    if latest_article:
-        if last_published_time == latest_time:
-            print(f"Стаття та ж сама, що й раніше. Пропускаємо. Наступний запуск о …") 
-            return None
-        else:
-            last_published_time = latest_time
-            print(f"Найсвіжіша новина: {latest_article['title']}")
-            return latest_article
-    else:
-        print("Немає новин із датами публікації.")
-        return None
-    

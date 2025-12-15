@@ -7,6 +7,7 @@ from pprint import pprint
 # Створюємо змінні
 RSS_FEEDS = []
 
+
 # Читаємо RSS-стрічки для парсингу з файлу rss_feed_links та добавляємо їх в list але без дублювання, бо швидкість обрбки падає
 def reed_rss(): 
     """Читає RSS-посилання з файлу без дублювання."""
@@ -18,6 +19,7 @@ def reed_rss():
                 RSS_FEEDS.append(line)
     print("Завантажені RSS:", RSS_FEEDS)
     return RSS_FEEDS
+
 
 # ----------------- Початок функції витягування статей з rss -----------------
 def fetch_articles(RSS_FEEDS):
@@ -43,14 +45,4 @@ def fetch_articles(RSS_FEEDS):
                        }])
                     print(f"Збережено нову статтю: '{entry.title}'")
     return []  # Повертаємо порожній список, якщо немає нових статей
-
-
 # ----------------- Кінець функції витягування статей з rss -----------------
-
-# reed_rss()  # Викликаємо функцію для початкового завантаження RSS-стрічок
-# pprint(RSS_FEEDS)  # Тестовий виклик функції для отримання всіх статей
-# articles = fetch_articles(RSS_FEEDS)
-# for article in articles:
-#     pprint(article['title'])
-#     pprint(article['published'])
-

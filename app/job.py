@@ -18,8 +18,9 @@ async def job():
 
     try:
         selected_article = get_article()
+        print(f"Вибрана стаття для обробки: '{selected_article['title']}'")
         # Генеруємо текст новини
-        news_text = generate_news(selected_article) 
+        news_text = generate_news(selected_article)
 
         # Відправляємо в Telegram
         await send_telegram(news_text) # Відправляємо новину у Telegram
@@ -28,13 +29,3 @@ async def job():
 
     except Exception as e:
         print(f"❌ Помилка під час обробки новини: {e}")
-
-
-# async def job():
-    # feed = reed_rss()
-    # fetched_article = fetch_articles(feed)
-    # if fetched_article is None:
-    #     print("Запуск відкладаєтсья")
-    #     return
-    # news_text = generate_news(fetched_article)
-    # await send_all(news_text)

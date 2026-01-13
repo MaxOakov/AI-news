@@ -10,7 +10,7 @@ async def job_with_log():
     await job()
 
     # Обчислюємо час наступного запуску
-    next_time = datetime.now() + timedelta(hours=1)
+    next_time = datetime.now() + timedelta(hours=2)
     print(f"⏰ Наступний запуск о {next_time.strftime('%H:%M')}")
 
 
@@ -38,7 +38,7 @@ def start_scheduler():
     loop.create_task(job_with_log())
 
     # Планування задач кожні 3 години
-    schedule.every(1).hours.do(job_wrapper)
+    schedule.every(2).hours.do(job_wrapper)
 
     # Запуск scheduler_loop у глобальному loop
     loop.create_task(scheduler_loop())

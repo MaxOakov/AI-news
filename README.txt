@@ -18,7 +18,7 @@ Setup Instructions:
 
 4. Run the Bot
 	- Start the bot with:
-	  python main.py
+	  python run.py
 	- The bot will begin fetching news from RSS feeds, rewriting them, and posting to Telegram.
 
 Note:

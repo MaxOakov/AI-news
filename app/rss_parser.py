@@ -1,7 +1,6 @@
 import feedparser
 import datetime
 from app.mongo import article_exists, create_article
-from pprint import pprint
 
 
 # Створюємо змінні
@@ -30,7 +29,7 @@ def fetch_articles(RSS_FEEDS):
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
         # limit saved new articles per feed
-        for entry in feed.entries[:3]:  # Перевіряємо лише перші 3 статті у фіді
+        for entry in feed.entries[:1]:  # Перевіряємо лише першу статтю у фіді
             if hasattr(entry, 'published_parsed'):
                 if article_exists(entry.title) == True:
                     print(f"Пропускаємо. Стаття '{entry.title}' вже існує в базі даних.")

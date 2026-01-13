@@ -3,6 +3,7 @@ from pathlib import Path
 
 # Ініціалізація клієнта Ggoogle Gemini API та Telegram-бота
 client = genai.Client()
+print("Клієнт Gemini ініціалізовано.")
 
 
 def generate_news(article):
@@ -10,12 +11,7 @@ def generate_news(article):
     Генерує текст новини через GEMINI API.
     """
 
-    print("Стаття відправлена на переписування...")
-
     prompt_template = Path("prompt.txt").read_text(encoding="utf-8")
-
-
-    
 
     prompt = prompt_template.format(
         title=article["title"],

@@ -45,8 +45,8 @@ async def job_with_log(retry_count=0, max_retries=2):
             # Якщо не 503 або вичерпали спроби - логуємо помилку
             print(f"⏹ Задача припинена. Спроб: {retry_count}")
     
-    # Обчислюємо час наступного запуску (виводиться завжди)
-    next_time = datetime.now() + timedelta(hours=2)
+    # Обчислюємо час наступного запуску в локальному часі (виводиться завжди)
+    next_time = datetime.now(LOCAL_TZ) + timedelta(hours=2)
     print(f"⏰ Наступний запуск о {next_time.strftime('%H:%M')}")
 
 

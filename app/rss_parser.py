@@ -1,5 +1,6 @@
 import feedparser
 import datetime
+import time
 from app.mongo import article_exists, create_article
 
 
@@ -23,25 +24,35 @@ def reed_rss():
 # ----------------- Початок функції витягування статей з rss -----------------
 def fetch_articles(RSS_FEEDS):
     """
-    Перевіряє всі RSS-фіди на наявність нових статей.
+    Перевіряє всі RSS-фіди на наявність нових статей з retry механізмом.
     Повертає список нових статей.
     """ 
+    max_retries = 3
     for url in RSS_FEEDS:
-        feed = feedparser.parse(url)
-        # limit saved new articles per feed
-        for entry in feed.entries[:1]:  # Перевіряємо лише першу статтю у фіді
-            if hasattr(entry, 'published_parsed'):
-                if article_exists(entry.title) == True:
-                    print(f"Пропускаємо. Стаття '{entry.title}' вже існує в базі даних.")
-                    continue  # Пропускаємо цю статтю, якщо вона вже є в базі даних
+        for retry_count in range(max_retries):
+            try:
+                feed = feedparser.parse(url)
+                # limit saved new articles per feed
+                for entry in feed.entries[:1]:  # Перевіряємо лише першу статтю у фіді
+                    if hasattr(entry, 'published_parsed'):
+                        if article_exists(entry.title) == True:
+                            print(f"Пропускаємо. Стаття '{entry.title}' вже існує в базі даних.")
+                            continue  # Пропускаємо цю статтю, якщо вона вже є в базі даних
+                        else:
+                            create_article([{
+                                "title": entry.title,
+                                "url": entry.link,
+                                "summary": getattr(entry, 'summary', ''),
+                                "published": datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc),
+                                "is_sent": False
+                               }])
+                            print(f"Збережено нову статтю: '{entry.title}'")
+                break  # Успішно оброблено - виходимо з retry цикла
+            except Exception as e:
+                print(f"⚠️ Помилка при парсингу RSS {url} (спроба {retry_count + 1}/{max_retries}): {e}")
+                if retry_count < max_retries - 1:
+                    time.sleep(2)  # Затримка перед повторною спробою
                 else:
-                    create_article([{
-                        "title": entry.title,
-                        "url": entry.link,
-                        "summary": getattr(entry, 'summary', ''),
-                        "published": datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc),
-                        "is_sent": False
-                       }])
-                    print(f"Збережено нову статтю: '{entry.title}'")
+                    print(f"⏹ Вичерпані спроби для {url}")
     return []  # Повертаємо порожній список, якщо немає нових статей
 # ----------------- Кінець функції витягування статей з rss -----------------

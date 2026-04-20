@@ -1,5 +1,6 @@
 from app.config import MONGODB_URL
 from pymongo import MongoClient
+import time
 
 
 connection_string = MONGODB_URL
@@ -20,33 +21,66 @@ print("Collections in 'news' database:", collections)
 print()
 
 
+import time
+
+
 def create_article(new_articles):
-    """Зберігає статтю в MongoDB."""
+    """Зберігає статтю в MongoDB з retry механізмом."""
+    max_retries = 3
     news_collection = test_db.articles
     for article in new_articles:
-        result = news_collection.insert_one(article)
-        print(f"Стаття збережена з id: {result.inserted_id}")
+        for retry_count in range(max_retries):
+            try:
+                result = news_collection.insert_one(article)
+                print(f"Стаття збережена з id: {result.inserted_id}")
+                break  # Успіх - виходимо з retry цикла
+            except Exception as e:
+                print(f"⚠️ Помилка при збереженні статті (спроба {retry_count + 1}/{max_retries}): {e}")
+                if retry_count < max_retries - 1:
+                    time.sleep(1)  # Затримка перед повторною спробою
+                else:
+                    print(f"⏹ Не вдалося зберегти статтю: {article.get('title', 'Unknown')}")
 
 
 def get_article():
-    """Отримує статтю з бази даних."""
-    saved_articles = test_db.articles.find_one(
-        {
-            "$or": [
-                {"is_sent": False},
-                {"is_sent": None},
-                {"is_sent": {"$exists": False}}
-            ]
-        },
-        sort=[("published", -1)]
-    )
-    return saved_articles
+    """Отримує статтю з бази даних з retry механізмом."""
+    max_retries = 3
+    for retry_count in range(max_retries):
+        try:
+            saved_articles = test_db.articles.find_one(
+                {
+                    "$or": [
+                        {"is_sent": False},
+                        {"is_sent": None},
+                        {"is_sent": {"$exists": False}}
+                    ]
+                },
+                sort=[("published", -1)]
+            )
+            return saved_articles
+        except Exception as e:
+            print(f"⚠️ Помилка при отриманні статті (спроба {retry_count + 1}/{max_retries}): {e}")
+            if retry_count < max_retries - 1:
+                time.sleep(1)  # Затримка перед повторною спробою
+            else:
+                print("⏹ Не вдалося отримати статтю з бази даних.")
+                return None
 
 
 def article_exists(title):
-    """Перевіряє, чи існує стаття з таким заголовком в базі даних."""
+    """Перевіряє, чи існує стаття з таким заголовком в базі даних з retry механізмом."""
+    max_retries = 3
     news_collection = test_db.articles
-    return news_collection.count_documents({"title": title}, limit = 1) != 0
+    for retry_count in range(max_retries):
+        try:
+            return news_collection.count_documents({"title": title}, limit=1) != 0
+        except Exception as e:
+            print(f"⚠️ Помилка при перевірці статті (спроба {retry_count + 1}/{max_retries}): {e}")
+            if retry_count < max_retries - 1:
+                time.sleep(1)  # Затримка перед повторною спробою
+            else:
+                print(f"⏹ Не вдалося перевірити наявність статті: {title}")
+                return False
 
 
 def mark_article_as_sent(article_id):

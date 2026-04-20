@@ -1,6 +1,9 @@
-# app/__init__.py
 import asyncio
+import sys
 
-loop = asyncio.get_event_loop()
+# Create and set the event loop for the entire application
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-# from .job import 
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)

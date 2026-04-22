@@ -8,6 +8,12 @@ from app.job import job
 
 def get_local_timezone():
     tz_name = os.getenv("TIMEZONE") or os.getenv("TZ") or "UTC"
+    # Мапінг старих назв таймзон на нові (наприклад, Kiev -> Kyiv)
+    tz_mapping = {
+        "Europe/Kiev": "Europe/Kyiv",
+        # Додайте інші мапінги за потреби
+    }
+    tz_name = tz_mapping.get(tz_name, tz_name)
     try:
         return ZoneInfo(tz_name)
     except Exception:
@@ -68,7 +74,7 @@ async def scheduler_loop():
     """Асинхронний цикл, який запускає pending jobs"""
     while True:
         schedule.run_pending()
-        await asyncio.sleep(1)  # не блокуємо loop
+        await asyncio.sleep(60)  # не блокуємо loop
 
 
 async def start_scheduler():

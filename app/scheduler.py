@@ -6,21 +6,14 @@ import schedule
 from app.job import job
 
 
-def get_local_timezone():
-    tz_name = os.getenv("TIMEZONE") or os.getenv("TZ") or "UTC"
-    # Мапінг старих назв таймзон на нові (наприклад, Kiev -> Kyiv)
-    tz_mapping = {
-        "Europe/Kiev": "Europe/Kyiv",
-        # Додайте інші мапінги за потреби
-    }
-    tz_name = tz_mapping.get(tz_name, tz_name)
+def get_kyiv_timezone():
     try:
-        return ZoneInfo(tz_name)
+        return ZoneInfo("Europe/Kyiv")
     except Exception:
-        print(f"⚠️ Невірна таймзона '{tz_name}'. Використовується UTC.")
+        print("⚠️ Не вдалося завантажити таймзону Europe/Kyiv. Використовується UTC.")
         return timezone.utc
 
-LOCAL_TZ = get_local_timezone()
+KYIV_TZ = get_kyiv_timezone()
 
 
 # ----------------- Планувальник -----------------
@@ -51,16 +44,16 @@ async def job_with_log(retry_count=0, max_retries=2):
             # Якщо не 503 або вичерпали спроби - логуємо помилку
             print(f"⏹ Задача припинена. Спроб: {retry_count}")
     
-    # Обчислюємо час наступного запуску в локальному часі (виводиться завжди)
-    next_time = datetime.now(LOCAL_TZ) + timedelta(hours=2)
+    # Обчислюємо час наступного запуску в київському часі (виводиться завжди)
+    next_time = datetime.now(KYIV_TZ) + timedelta(hours=2)
     print(f"⏰ Наступний запуск о {next_time.strftime('%H:%M')}")
 
 
 def job_wrapper():
     """Обгортка для schedule: перевіряє час перед запуском job"""
-    local_now = datetime.now(LOCAL_TZ)
-    now = local_now.hour
-    print(f"Локальний час ({LOCAL_TZ}): {local_now.strftime('%Y-%m-%d %H:%M')}")
+    kyiv_now = datetime.now(KYIV_TZ)
+    now = kyiv_now.hour
+    print(f"Київський час ({KYIV_TZ}): {kyiv_now.strftime('%Y-%m-%d %H:%M')}")
     if 9 <= now <= 22:
         print(f"Зараз {now} година. Виконується автоматизатор новин...")
         # job асинхронна → створюємо таск у глобальному loop
@@ -79,9 +72,8 @@ async def scheduler_loop():
 
 async def start_scheduler():
     """Асинхронна функція для запуску планувальника"""
-    # Запуск при включенні 
-    task = asyncio.create_task(job_with_log())
-    task.add_done_callback(handle_task_exception)
+    # Запуск при включенні з перевіркою часу
+    job_wrapper()
 
     # Планування задач кожні 2 години
     schedule.every(2).hours.do(job_wrapper)

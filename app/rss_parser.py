@@ -1,58 +1,55 @@
 import feedparser
 import datetime
 import time
-from app.mongo import article_exists, create_article
+from app.mongo import article_exists, create_article, get_chat_rss_links
 
 
-# Створюємо змінні
-RSS_FEEDS = []
-
-
-# Читаємо RSS-стрічки для парсингу з файлу rss_feed_links та добавляємо їх в list але без дублювання, бо швидкість обрбки падає
-def reed_rss(): 
-    """Читає RSS-посилання з файлу без дублювання."""
-    RSS_FEEDS.clear()
-    with open('rss_feed_links.txt', 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#'):
-                RSS_FEEDS.append(line)
-    print("Завантажені RSS:", RSS_FEEDS)
-    return RSS_FEEDS
+# Read RSS links per chat from MongoDB, no global file state.
+def get_chat_rss_feeds(chat_id):
+    """Return all active RSS URLs for a specific chat."""
+    links = get_chat_rss_links(str(chat_id))
+    urls = []
+    for item in links:
+        url = str(item.get("url", "")).strip()
+        if url:
+            urls.append(url)
+    print(f"Завантажені RSS для chat_id={chat_id}: {urls}")
+    return urls
 
 
 # ----------------- Початок функції витягування статей з rss -----------------
-def fetch_articles(RSS_FEEDS):
+def fetch_articles_for_chat(chat_id, rss_feeds):
     """
-    Перевіряє всі RSS-фіди на наявність нових статей з retry механізмом.
-    Повертає список нових статей.
-    """ 
+    Перевіряє всі RSS-фіди конкретного чату на наявність нових статей з retry механізмом.
+    """
+    if not rss_feeds:
+        return []
+
     max_retries = 3
-    for url in RSS_FEEDS:
+    for url in rss_feeds:
         for retry_count in range(max_retries):
             try:
                 feed = feedparser.parse(url)
-                # limit saved new articles per feed
-                for entry in feed.entries[:1]:  # Перевіряємо лише першу статтю у фіді
+                for entry in feed.entries[:1]:
                     if hasattr(entry, 'published_parsed'):
-                        if article_exists(entry.title) == True:
-                            print(f"Пропускаємо. Стаття '{entry.title}' вже існує в базі даних.")
-                            continue  # Пропускаємо цю статтю, якщо вона вже є в базі даних
-                        else:
-                            create_article([{
-                                "title": entry.title,
-                                "url": entry.link,
-                                "summary": getattr(entry, 'summary', ''),
-                                "published": datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc),
-                                "is_sent": False
-                               }])
-                            print(f"Збережено нову статтю: '{entry.title}'")
-                break  # Успішно оброблено - виходимо з retry цикла
+                        if article_exists(entry.title, chat_id):
+                            print(f"Пропускаємо. Стаття '{entry.title}' вже існує для чату {chat_id}.")
+                            continue
+                        create_article([{
+                            "title": entry.title,
+                            "url": entry.link,
+                            "summary": getattr(entry, 'summary', ''),
+                            "published": datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc),
+                            "is_sent": False,
+                            "chat_id": str(chat_id),
+                        }], chat_id=str(chat_id))
+                        print(f"Збережено нову статтю для чату {chat_id}: '{entry.title}'")
+                break
             except Exception as e:
                 print(f"⚠️ Помилка при парсингу RSS {url} (спроба {retry_count + 1}/{max_retries}): {e}")
                 if retry_count < max_retries - 1:
-                    time.sleep(2)  # Затримка перед повторною спробою
+                    time.sleep(2)
                 else:
                     print(f"⏹ Вичерпані спроби для {url}")
-    return []  # Повертаємо порожній список, якщо немає нових статей
+    return []
 # ----------------- Кінець функції витягування статей з rss -----------------

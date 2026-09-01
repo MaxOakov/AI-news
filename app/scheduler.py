@@ -17,14 +17,14 @@ KYIV_TZ = get_kyiv_timezone()
 
 
 # ----------------- Планувальник -----------------
+_job_running = False
+
+
 def handle_task_exception(task):
     """Callback for handling exceptions in background tasks"""
     try:
-        # Check if task was cancelled
         if task.cancelled():
             return
-        
-        # Get the result - this will raise if there was an exception
         task.result()
     except asyncio.CancelledError:
         print("⏹ Задача скасована.")
@@ -35,39 +35,58 @@ def handle_task_exception(task):
 
 
 async def job_with_log(retry_count=0, max_retries=2):
-    """Асинхронний запуск job з повідомленням про наступний запуск."""
+    """Run the news job with retries while preventing overlapping executions."""
+    global _job_running
+
+    if _job_running:
+        print("⏸ Попередній запуск новин ще виконується. Пропускаємо.")
+        return False
+
+    _job_running = True
     try:
-        await job()
-    except Exception as e:
-        print(f"❌ Помилка при виконанні новин: {type(e).__name__}: {e}")
-        # Якщо це тимчасова помилка (503) і маємо спроби - повторюємо
-        if "503" in str(e) and retry_count < max_retries:
-            retry_count += 1
-            print(f"🔄 Повторна спроба {retry_count}/{max_retries}...")
-            await asyncio.sleep(5)  # Затримка перед повторною спробою
-            await job_with_log(retry_count=retry_count, max_retries=max_retries)
-            return
-        else:
-            # Якщо не 503 або вичерпали спроби - логуємо помилку
-            print(f"⏹ Задача припинена. Спроб: {retry_count}")
-    
-    # Обчислюємо час наступного запуску в київському часі (виводиться завжди)
-    next_time = datetime.now(KYIV_TZ) + timedelta(hours=2)
-    print(f"⏰ Наступний запуск о {next_time.strftime('%H:%M')}")
+        for attempt in range(retry_count, max_retries + 1):
+            try:
+                await job()
+                break
+            except Exception as e:
+                print(f"❌ Помилка при виконанні новин: {type(e).__name__}: {e}")
+                if "503" in str(e) and attempt < max_retries:
+                    print(f"🔄 Повторна спроба {attempt + 1}/{max_retries}...")
+                    await asyncio.sleep(5)
+                    continue
+                print(f"⏹ Задача припинена. Спроб: {attempt}")
+                return False
+
+        next_time = datetime.now(KYIV_TZ) + timedelta(hours=1)
+        print(f"⏰ Наступний запуск о {next_time.strftime('%H:%M')}")
+        return True
+    finally:
+        _job_running = False
+
+
+async def trigger_job_now():
+    """Start the newsletter job immediately, without waiting for the schedule."""
+    return await job_with_log()
 
 
 def job_wrapper():
-    """Обгортка для schedule: перевіряє час перед запуском job"""
+    """Schedule wrapper that avoids overlapping job runs."""
+    global _job_running
+
     kyiv_now = datetime.now(KYIV_TZ)
     now = kyiv_now.hour
     print(f"Київський час ({KYIV_TZ}): {kyiv_now.strftime('%Y-%m-%d %H:%M')}")
-    if 8 <= now < 23:  # Run between 8 AM and 11 PM
+    if 8 <= now < 23:
         print(f"Зараз {now} година. Виконується автоматизатор новин...")
-        # job асинхронна → створюємо таск у глобальному loop
+        if _job_running:
+            print("⏸ Задача вже виконується, пропускаємо поточний запуск.")
+            return False
         task = asyncio.create_task(job_with_log())
         task.add_done_callback(handle_task_exception)
+        return True
     else:
         print("⏸ Нічний час, задача не виконується.")
+        return False
 
 
 async def scheduler_loop():
@@ -82,8 +101,8 @@ async def start_scheduler():
     # Запуск при включенні з перевіркою часу
     job_wrapper()
 
-    # Планування задач кожні 2 години
-    schedule.every(5).minutes.do(job_wrapper)
+    # Планування задач кожні 5  хвилин
+    schedule.every(1).hours.do(job_wrapper)
 
     # Запуск scheduler_loop у глобальному loop
     await scheduler_loop()

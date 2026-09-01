@@ -54,7 +54,7 @@ def job_wrapper():
     kyiv_now = datetime.now(KYIV_TZ)
     now = kyiv_now.hour
     print(f"Київський час ({KYIV_TZ}): {kyiv_now.strftime('%Y-%m-%d %H:%M')}")
-    if 9 <= now <= 22:
+    if 1 <= now <= 24:
         print(f"Зараз {now} година. Виконується автоматизатор новин...")
         # job асинхронна → створюємо таск у глобальному loop
         task = asyncio.create_task(job_with_log())
@@ -76,7 +76,7 @@ async def start_scheduler():
     job_wrapper()
 
     # Планування задач кожні 2 години
-    schedule.every(2).hours.do(job_wrapper)
+    schedule.every(5).minutes.do(job_wrapper)
 
     # Запуск scheduler_loop у глобальному loop
     await scheduler_loop()

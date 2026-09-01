@@ -150,6 +150,27 @@ async def show_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📝 Активний prompt для цього чату:\n\n{preview}")
 
 
+async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show the available bot commands and their descriptions."""
+    if update.message is None:
+        return
+
+    help_text = (
+        "📖 Доступні команди:\n\n"
+        "/start — зареєструвати цей чат у боті\n"
+        "/help — показати список команд\n"
+        "/runjob — негайно запустити обробку новин\n"
+        "/news — те саме, що /runjob\n"
+        "/settopic — встановити поточну тему форуму для надсилання новин\n"
+        "/addrss <url1>, <url2> — додати один або кілька RSS-лінків для цього чату\n"
+        "/listfeeds — показати RSS-лінки цього чату\n"
+        "/setprompt <текст> — зберегти власний prompt для цього чату\n"
+        "/resetprompt — повернути використання стандартного prompt.txt\n"
+        "/prompt — показати активний prompt цього чату"
+    )
+    await update.message.reply_text(help_text)
+
+
 async def main():
     """Initialize bot with scheduler."""
     if not TELEGRAM_TOKEN:
@@ -170,6 +191,7 @@ async def main():
     application.add_handler(CommandHandler('setprompt', set_prompt))
     application.add_handler(CommandHandler('resetprompt', reset_prompt))
     application.add_handler(CommandHandler('prompt', show_prompt))
+    application.add_handler(CommandHandler('help', show_help))
 
     async def run_scheduler_background():
         """Run scheduler in background without blocking."""

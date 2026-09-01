@@ -1,5 +1,6 @@
 from app.config import MONGODB_URL
 from pymongo import MongoClient
+from datetime import datetime
 import time
 
 
@@ -19,9 +20,6 @@ collections = test_db.list_collection_names()
 print("Databases:", dbs)
 print("Collections in 'news' database:", collections)
 print()
-
-
-import time
 
 
 def create_article(new_articles):
@@ -103,3 +101,35 @@ def get_latest_article_time():
     if latest_article:
         return latest_article["published"]
     return None
+
+
+# Add these functions to mongo.py
+def register_chat(chat_id: str, chat_name: str, chat_type: str = "private"):
+    """Save chat to DB."""
+    chats_collection = test_db.chats
+    return chats_collection.update_one(
+        {"chat_id": str(chat_id)},
+        {
+            "$set": {
+                "chat_id": str(chat_id),
+                "chat_name": chat_name,
+                "chat_type": chat_type,
+                "is_active": True
+            },
+            "$setOnInsert": {"added_at": datetime.now()}
+        },
+        upsert=True
+    )
+
+def get_all_active_chats():
+    """Retrieve all active chats from DB."""
+    chats_collection = test_db.chats
+    return list(chats_collection.find({"is_active": True}))
+
+def deactivate_chat(chat_id: str):
+    """Mark chat as inactive."""
+    chats_collection = test_db.chats
+    return chats_collection.update_one(
+        {"chat_id": str(chat_id)},
+        {"$set": {"is_active": False}}
+    )

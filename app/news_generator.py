@@ -11,7 +11,7 @@ def generate_news(article):
     """
     Генерує текст новини через GEMINI API з retry механізмом.
     """
-    prompt_template = Path("prompt.txt").read_text(encoding="utf-8")
+    prompt_template = Path("prompt_anikoe.txt").read_text(encoding="utf-8")
 
     prompt = prompt_template.format(
         title=article["title"],

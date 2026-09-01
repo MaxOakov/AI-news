@@ -20,7 +20,14 @@ KYIV_TZ = get_kyiv_timezone()
 def handle_task_exception(task):
     """Callback for handling exceptions in background tasks"""
     try:
+        # Check if task was cancelled
+        if task.cancelled():
+            return
+        
+        # Get the result - this will raise if there was an exception
         task.result()
+    except asyncio.CancelledError:
+        print("⏹ Задача скасована.")
     except Exception as e:
         print(f"❌ Помилка при виконанні задачі: {type(e).__name__}: {e}")
         if "503" in str(e):
@@ -54,7 +61,7 @@ def job_wrapper():
     kyiv_now = datetime.now(KYIV_TZ)
     now = kyiv_now.hour
     print(f"Київський час ({KYIV_TZ}): {kyiv_now.strftime('%Y-%m-%d %H:%M')}")
-    if 1 <= now <= 24:
+    if 8 <= now < 23:  # Run between 8 AM and 11 PM
         print(f"Зараз {now} година. Виконується автоматизатор новин...")
         # job асинхронна → створюємо таск у глобальному loop
         task = asyncio.create_task(job_with_log())

@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from app.telegram_bot import telegram_bot
 from app.config import TELEGRAM_TOKEN
 from app.scheduler import start_scheduler, trigger_job_now
-from app.mongo import save_rss_link, get_chat_rss_links
+from app.mongo import save_rss_link, get_chat_rss_links, save_chat_prompt, reset_chat_prompt, get_chat_prompt, get_prompt_for_chat
 
 logging.basicConfig(level=logging.INFO)
 
@@ -62,22 +62,41 @@ async def set_topic_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_rss_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Add a custom RSS URL for the current chat."""
+    """Add one or more comma-separated RSS URLs for the current chat."""
     if update.effective_chat is None or update.message is None:
         return
 
     if not context.args:
-        await update.message.reply_text("Використання: /addrss https://example.com/rss")
+        await update.message.reply_text(
+            "Використання: /addrss https://example.com/rss, https://example.org/feed"
+        )
         return
 
-    rss_url = context.args[0].strip()
-    if not rss_url.startswith("http"):
-        await update.message.reply_text("❌ RSS URL має починатися з http:// або https://")
+    rss_urls = []
+    for value in " ".join(context.args).split(","):
+        rss_url = value.strip()
+        if rss_url and rss_url not in rss_urls:
+            rss_urls.append(rss_url)
+
+    invalid_urls = [
+        rss_url for rss_url in rss_urls
+        if not rss_url.startswith(("http://", "https://"))
+    ]
+    if invalid_urls:
+        await update.message.reply_text(
+            "❌ Некоректні RSS URL (мають починатися з http:// або https://):\n"
+            + "\n".join(invalid_urls)
+        )
         return
 
     chat_id = str(update.effective_chat.id)
-    save_rss_link(chat_id, rss_url)
-    await update.message.reply_text(f"✅ RSS-лінк збережено для цього чату:\n{rss_url}")
+    for rss_url in rss_urls:
+        save_rss_link(chat_id, rss_url)
+
+    await update.message.reply_text(
+        f"✅ Збережено RSS-лінків для цього чату: {len(rss_urls)}\n"
+        + "\n".join(rss_urls)
+    )
 
 
 async def list_rss_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,6 +112,42 @@ async def list_rss_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     formatted = "\n".join(f"- {item['url']}" for item in links)
     await update.message.reply_text(f"📚 RSS для цього чату:\n{formatted}")
+
+
+async def set_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set a custom prompt for the current chat."""
+    if update.effective_chat is None or update.message is None:
+        return
+
+    if not context.args:
+        await update.message.reply_text("Використання: /setprompt <текст промпту>")
+        return
+
+    custom_prompt = " ".join(context.args)
+    chat_id = str(update.effective_chat.id)
+    save_chat_prompt(chat_id, custom_prompt)
+    await update.message.reply_text("✅ Користувацький prompt для цього чату збережено. Тепер він буде використовуватися замість prompt.txt.")
+
+
+async def reset_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reset the custom prompt for the current chat and use the default one again."""
+    if update.effective_chat is None or update.message is None:
+        return
+
+    chat_id = str(update.effective_chat.id)
+    reset_chat_prompt(chat_id)
+    await update.message.reply_text("✅ Користувацький prompt скинуто. Знову використовується prompt.txt.")
+
+
+async def show_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display the active prompt for the current chat."""
+    if update.effective_chat is None or update.message is None:
+        return
+
+    chat_id = str(update.effective_chat.id)
+    active_prompt = get_prompt_for_chat(chat_id)
+    preview = active_prompt[:800] + ("..." if len(active_prompt) > 800 else "")
+    await update.message.reply_text(f"📝 Активний prompt для цього чату:\n\n{preview}")
 
 
 async def main():
@@ -112,6 +167,9 @@ async def main():
     application.add_handler(CommandHandler('settopic', set_topic_id))
     application.add_handler(CommandHandler('addrss', add_rss_link))
     application.add_handler(CommandHandler('listfeeds', list_rss_links))
+    application.add_handler(CommandHandler('setprompt', set_prompt))
+    application.add_handler(CommandHandler('resetprompt', reset_prompt))
+    application.add_handler(CommandHandler('prompt', show_prompt))
 
     async def run_scheduler_background():
         """Run scheduler in background without blocking."""

@@ -1,17 +1,18 @@
 from google import genai
-from pathlib import Path
 import time
+from app.mongo import get_prompt_for_chat
 
 # Ініціалізація клієнта Ggoogle Gemini API та Telegram-бота
 client = genai.Client()
 print("Клієнт Gemini ініціалізовано.")
 
 
-def generate_news(article):
+def generate_news(article, chat_id=None):
     """
     Генерує текст новини через GEMINI API з retry механізмом.
+    Якщо для чату є custom prompt, він має пріоритет над prompt.txt.
     """
-    prompt_template = Path("prompt_anikoe.txt").read_text(encoding="utf-8")
+    prompt_template = get_prompt_for_chat(str(chat_id)) if chat_id is not None else get_prompt_for_chat("default")
 
     prompt = prompt_template.format(
         title=article["title"],

@@ -20,7 +20,7 @@ async def job():
             continue
 
         print(f"✍️ Вибрана стаття для чату {chat_id}: '{selected_article['title']}'")
-        news_text = generate_news(selected_article)
+        news_text = generate_news(selected_article, chat_id=chat_id)
         message_thread_id = chat_data.get("message_thread_id") if isinstance(chat_data, dict) else None
         sent = await telegram_bot.send_message(
             chat_id,

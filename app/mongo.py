@@ -1,3 +1,4 @@
+from pathlib import Path
 from app.config import MONGODB_URL
 from pymongo import MongoClient
 from datetime import datetime
@@ -6,6 +7,17 @@ import time
 
 client = None
 test_db = None
+
+
+def get_default_prompt_text():
+    """Load the default prompt from the project root prompt.txt file."""
+    prompt_path = Path(__file__).resolve().parent.parent / "prompt.txt"
+    if prompt_path.exists():
+        return prompt_path.read_text(encoding="utf-8")
+    legacy_path = Path(__file__).resolve().parent.parent / "prompt_anikoe.txt"
+    if legacy_path.exists():
+        return legacy_path.read_text(encoding="utf-8")
+    return "Rewrite the following news in a friendly gaming-news tone. {title}\n{summary}\n{url}"
 
 
 def get_db():
@@ -192,3 +204,47 @@ def remove_rss_link(chat_id: str, rss_url: str):
     """Remove a RSS link for a chat."""
     rss_collection = get_db().rss_links
     return rss_collection.delete_one({"chat_id": str(chat_id), "url": rss_url.strip()})
+
+
+def save_chat_prompt(chat_id: str, custom_prompt: str):
+    """Save a custom prompt for a particular chat."""
+    chat_prompts = get_db().chat_prompts
+    cleaned = custom_prompt.strip()
+    if not cleaned:
+        return None
+    return chat_prompts.update_one(
+        {"chat_id": str(chat_id)},
+        {
+            "$set": {
+                "chat_id": str(chat_id),
+                "custom_prompt": cleaned,
+                "updated_at": datetime.now(),
+            },
+            "$setOnInsert": {"created_at": datetime.now()},
+        },
+        upsert=True,
+    )
+
+
+def get_chat_prompt(chat_id: str):
+    """Return the custom prompt for a chat, or None if it is not set."""
+    chat_prompts = get_db().chat_prompts
+    doc = chat_prompts.find_one({"chat_id": str(chat_id)})
+    if not doc:
+        return None
+    prompt = str(doc.get("custom_prompt", "")).strip()
+    return prompt or None
+
+
+def reset_chat_prompt(chat_id: str):
+    """Remove the custom prompt for a chat and fall back to the default one."""
+    chat_prompts = get_db().chat_prompts
+    return chat_prompts.delete_one({"chat_id": str(chat_id)})
+
+
+def get_prompt_for_chat(chat_id: str):
+    """Resolve the prompt for this chat: per-chat custom prompt first, default prompt as fallback."""
+    custom_prompt = get_chat_prompt(str(chat_id))
+    if custom_prompt:
+        return custom_prompt
+    return get_default_prompt_text()

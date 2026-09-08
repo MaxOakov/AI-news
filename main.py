@@ -208,7 +208,16 @@ async def main():
             scheduler_task = asyncio.create_task(run_scheduler_background())
             await application.start()
             await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-            await asyncio.Event().wait()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                # Must stop updater/application before the `async with` block
+                # exits and calls shutdown(), otherwise PTB raises
+                # "This Application is still running!".
+                if application.updater.running:
+                    await application.updater.stop()
+                if application.running:
+                    await application.stop()
     finally:
         if scheduler_task is not None:
             scheduler_task.cancel()

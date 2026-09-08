@@ -1,6 +1,8 @@
 from google import genai
 import time
+from app.config import GEMINI_MODEL
 from app.mongo import get_prompt_for_chat
+
 
 # Ініціалізація клієнта Ggoogle Gemini API та Telegram-бота
 client = genai.Client()
@@ -24,7 +26,7 @@ def generate_news(article, chat_id=None):
     for retry_count in range(max_retries):
         try:
             response = client.models.generate_content(
-                model="gemini-3.1-flash-lite-preview",
+                model=GEMINI_MODEL,
                 contents=prompt
             )
             if response.candidates:

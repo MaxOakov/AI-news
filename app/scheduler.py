@@ -101,7 +101,7 @@ async def start_scheduler():
     # Запуск при включенні з перевіркою часу
     job_wrapper()
 
-    # Планування задач кожні 5  хвилин
+    # Планування задач щогодини
     schedule.every(1).hours.do(job_wrapper)
 
     # Запуск scheduler_loop у глобальному loop

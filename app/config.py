@@ -7,7 +7,7 @@ load_dotenv()
 
 # ----------------- Налаштування -----------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")  # Модель за замовчуванням
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MONGODB_URL = os.getenv("MONGODB_URL")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL")  # Дефолтне значення моделі

@@ -1,4 +1,8 @@
-from app.runner import start
+import asyncio
+from main import main
 
 if __name__ == "__main__":
-    start()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n⏹ Зупинено користувачем.")

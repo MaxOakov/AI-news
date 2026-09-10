@@ -25,30 +25,49 @@ class NewsPipeline:
         self._articles = article_repository
         self._telegram_bot = telegram_bot
 
-    async def run(self):
-        """Main job: fetch per-chat feeds and send to each registered chat."""
+    async def run(self, chat_id: str | None = None):
+        """Run the job.
+
+        If `chat_id` is given, only that chat is processed (used by the
+        manual /runjob and /news commands so they don't affect every other
+        chat). Otherwise every registered chat is processed (used by the
+        hourly schedule).
+        """
+        if chat_id is not None:
+            chat_id = str(chat_id)
+            chat = self._telegram_bot.chats.get(chat_id)
+            if chat is None:
+                print(f"⚠️ Чат {chat_id} не зареєстрований. Спочатку викличте /start.")
+                return
+            await self._process_chat(chat_id, chat)
+            return
+
         for chat_id, chat in list(self._telegram_bot.chats.items()):
-            rss_feeds = self._rss_feed_service.get_feeds_for_chat(chat_id)
-            if not rss_feeds:
-                print(f"ℹ️ У чату {chat_id} немає RSS-лінків. Пропускаємо.")
-                continue
+            await self._process_chat(chat_id, chat)
 
-            self._rss_feed_service.fetch_new_articles(chat_id, rss_feeds)
-            selected_article = self._articles.get_next_unsent(chat_id)
-            if not selected_article:
-                print(f"❌ Немає нових статей для відправки в чат {chat_id}")
-                continue
+    async def _process_chat(self, chat_id, chat):
+        """Fetch feeds for one chat, pick an article, rewrite it, and send it."""
+        rss_feeds = self._rss_feed_service.get_feeds_for_chat(chat_id)
+        if not rss_feeds:
+            print(f"ℹ️ У чату {chat_id} немає RSS-лінків. Пропускаємо.")
+            return
 
-            print(f"✍️ Вибрана стаття для чату {chat_id}: '{selected_article.title}'")
-            news_text = self._news_generator.generate(selected_article, chat_id=chat_id)
-            sent = await self._telegram_bot.send_message(
-                chat_id,
-                news_text,
-                message_thread_id=chat.message_thread_id,
-            )
+        self._rss_feed_service.fetch_new_articles(chat_id, rss_feeds)
+        selected_article = self._articles.get_next_unsent(chat_id)
+        if not selected_article:
+            print(f"❌ Немає нових статей для відправки в чат {chat_id}")
+            return
 
-            if sent:
-                self._articles.mark_as_sent(selected_article.id)
-                print(f"📊 Відправлено в чат {chat_id}")
-            else:
-                print(f"❌ Не вдалося відправити статтю в чат {chat_id}")
+        print(f"✍️ Вибрана стаття для чату {chat_id}: '{selected_article.title}'")
+        news_text = self._news_generator.generate(selected_article, chat_id=chat_id)
+        sent = await self._telegram_bot.send_message(
+            chat_id,
+            news_text,
+            message_thread_id=chat.message_thread_id,
+        )
+
+        if sent:
+            self._articles.mark_as_sent(selected_article.id)
+            print(f"📊 Відправлено в чат {chat_id}")
+        else:
+            print(f"❌ Не вдалося відправити статтю в чат {chat_id}")

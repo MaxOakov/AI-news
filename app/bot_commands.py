@@ -42,13 +42,14 @@ class BotCommands:
             await update.message.reply_text(f"✅ Привіт! Я зареєстрований для чату: {chat_name}")
 
     async def run_job_now(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Instantly trigger the news job from a Telegram command."""
+        """Instantly trigger the news job for this chat only."""
         if update.effective_chat is None:
             return
 
-        started = await self._scheduler_service.trigger_now()
+        chat_id = str(update.effective_chat.id)
+        started = await self._scheduler_service.trigger_now(chat_id=chat_id)
         if started:
-            text = "✅ Новий запуск новин розпочато вручну."
+            text = "✅ Новий запуск новин розпочато вручну для цього чату."
         else:
             text = "⏸ Попередній запуск новин ще виконується або задача не доступна зараз."
 

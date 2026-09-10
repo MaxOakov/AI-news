@@ -45,7 +45,7 @@ class SchedulerService:
             if "503" in str(e):
                 print("⚠️  Сервіс тимчасово недоступний. Повторна спроба при наступному запуску.")
 
-    async def _run_with_retry(self, retry_count=0, max_retries=2):
+    async def _run_with_retry(self, retry_count=0, max_retries=2, chat_id=None):
         """Run the news job with retries while preventing overlapping executions."""
         if self._running:
             print("⏸ Попередній запуск новин ще виконується. Пропускаємо.")
@@ -55,7 +55,7 @@ class SchedulerService:
         try:
             for attempt in range(retry_count, max_retries + 1):
                 try:
-                    await self._pipeline.run()
+                    await self._pipeline.run(chat_id=chat_id)
                     break
                 except Exception as e:
                     print(f"❌ Помилка при виконанні новин: {type(e).__name__}: {e}")
@@ -72,9 +72,13 @@ class SchedulerService:
         finally:
             self._running = False
 
-    async def trigger_now(self):
-        """Start the newsletter job immediately, without waiting for the schedule."""
-        return await self._run_with_retry()
+    async def trigger_now(self, chat_id=None):
+        """Start the newsletter job immediately, without waiting for the schedule.
+
+        If `chat_id` is given, only that chat is processed; otherwise every
+        registered chat is processed, same as the hourly schedule.
+        """
+        return await self._run_with_retry(chat_id=chat_id)
 
     def _scheduled_tick(self):
         """Schedule wrapper that avoids overlapping job runs."""

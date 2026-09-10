@@ -1,174 +1,49 @@
 import logging
 import asyncio
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from app.telegram_bot import telegram_bot
-from app.config import TELEGRAM_TOKEN
-from app.scheduler import scheduler_service
-from app.db import rss_link_repository, prompt_repository
+from telegram.ext import ApplicationBuilder, CommandHandler
+
+from app.config import TELEGRAM_TOKEN, MONGODB_URL, GEMINI_MODEL
+from app.db.database import Database
+from app.db.article_repository import ArticleRepository
+from app.db.chat_repository import ChatRepository
+from app.db.rss_link_repository import RssLinkRepository
+from app.db.prompt_repository import PromptRepository
+from app.services.rss_service import RssFeedService
+from app.services.news_generator import NewsGenerator
+from app.telegram_bot import TelegramBot
+from app.news_pipeline import NewsPipeline
+from app.scheduler import SchedulerService
+from app.bot_commands import BotCommands
 
 logging.basicConfig(level=logging.INFO)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start - register chat in DB."""
-    if update.effective_chat is None:
-        return
+def build_app():
+    """Composition root: construct the full object graph explicitly.
 
-    chat_id = str(update.effective_chat.id)
-    chat_name = update.effective_chat.title or (update.effective_user.first_name if update.effective_user else "Unknown user")
-    chat_type = update.effective_chat.type
-    message_thread_id = update.message.message_thread_id if update.message is not None else None
+    Every class in the app takes its dependencies through its constructor
+    (a Database, a repository, a service, ...) instead of reaching into
+    module-level singletons. This is the one place that wires them all
+    together, in dependency order.
+    """
+    database = Database(MONGODB_URL)
+    article_repository = ArticleRepository(database)
+    chat_repository = ChatRepository(database)
+    rss_link_repository = RssLinkRepository(database)
+    prompt_repository = PromptRepository(database)
 
-    await telegram_bot.register_chat_db(chat_id, chat_name, chat_type, message_thread_id)
-    if update.message is not None:
-        await update.message.reply_text(f"✅ Привіт! Я зареєстрований для чату: {chat_name}")
+    rss_feed_service = RssFeedService(article_repository, rss_link_repository)
+    news_generator = NewsGenerator(GEMINI_MODEL, prompt_repository)
 
+    telegram_bot = TelegramBot(token=TELEGRAM_TOKEN, chat_repository=chat_repository)
 
-async def run_job_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Instantly trigger the news job from a Telegram command."""
-    if update.effective_chat is None:
-        return
+    news_pipeline = NewsPipeline(rss_feed_service, news_generator, article_repository, telegram_bot)
+    scheduler_service = SchedulerService(news_pipeline)
 
-    started = await scheduler_service.trigger_now()
-    if started:
-        text = "✅ Новий запуск новин розпочато вручну."
-    else:
-        text = "⏸ Попередній запуск новин ще виконується або задача не доступна зараз."
+    bot_commands = BotCommands(telegram_bot, scheduler_service, rss_link_repository, prompt_repository)
 
-    if update.message is not None:
-        await update.message.reply_text(text)
-
-
-async def set_topic_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set or update the current forum topic id for this chat."""
-    if update.effective_chat is None or update.message is None:
-        return
-
-    chat_id = str(update.effective_chat.id)
-    chat_name = update.effective_chat.title or (update.effective_user.first_name if update.effective_user else "Unknown user")
-    chat_type = update.effective_chat.type
-    message_thread_id = update.message.message_thread_id
-
-    if message_thread_id is None:
-        await update.message.reply_text("⚠️ Ця команда працює лише в темі/форумах. Відправте її в темі, а не в основному чаті.")
-        return
-
-    success = await telegram_bot.register_chat_db(chat_id, chat_name, chat_type, message_thread_id)
-    if success:
-        await update.message.reply_text(f"✅ Для чату встановлено topic_id={message_thread_id}")
-    else:
-        await update.message.reply_text("❌ Не вдалося зберегти topic_id.")
-
-
-async def add_rss_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Add one or more comma-separated RSS URLs for the current chat."""
-    if update.effective_chat is None or update.message is None:
-        return
-
-    if not context.args:
-        await update.message.reply_text(
-            "Використання: /addrss https://example.com/rss, https://example.org/feed"
-        )
-        return
-
-    rss_urls = []
-    for value in " ".join(context.args).split(","):
-        rss_url = value.strip()
-        if rss_url and rss_url not in rss_urls:
-            rss_urls.append(rss_url)
-
-    invalid_urls = [
-        rss_url for rss_url in rss_urls
-        if not rss_url.startswith(("http://", "https://"))
-    ]
-    if invalid_urls:
-        await update.message.reply_text(
-            "❌ Некоректні RSS URL (мають починатися з http:// або https://):\n"
-            + "\n".join(invalid_urls)
-        )
-        return
-
-    chat_id = str(update.effective_chat.id)
-    for rss_url in rss_urls:
-        rss_link_repository.save(chat_id, rss_url)
-
-    await update.message.reply_text(
-        f"✅ Збережено RSS-лінків для цього чату: {len(rss_urls)}\n"
-        + "\n".join(rss_urls)
-    )
-
-
-async def list_rss_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List all active RSS links stored for the current chat."""
-    if update.effective_chat is None or update.message is None:
-        return
-
-    chat_id = str(update.effective_chat.id)
-    links = rss_link_repository.get_for_chat(chat_id)
-    if not links:
-        await update.message.reply_text("📭 Для цього чату не збережено жодного RSS-лінка.")
-        return
-
-    formatted = "\n".join(f"- {item['url']}" for item in links)
-    await update.message.reply_text(f"📚 RSS для цього чату:\n{formatted}")
-
-
-async def set_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set a custom prompt for the current chat."""
-    if update.effective_chat is None or update.message is None:
-        return
-
-    if not context.args:
-        await update.message.reply_text("Використання: /setprompt <текст промпту>")
-        return
-
-    custom_prompt = " ".join(context.args)
-    chat_id = str(update.effective_chat.id)
-    prompt_repository.save_custom(chat_id, custom_prompt)
-    await update.message.reply_text("✅ Користувацький prompt для цього чату збережено. Тепер він буде використовуватися замість prompt.txt.")
-
-
-async def reset_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reset the custom prompt for the current chat and use the default one again."""
-    if update.effective_chat is None or update.message is None:
-        return
-
-    chat_id = str(update.effective_chat.id)
-    prompt_repository.reset_custom(chat_id)
-    await update.message.reply_text("✅ Користувацький prompt скинуто. Знову використовується prompt.txt.")
-
-
-async def show_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Display the active prompt for the current chat."""
-    if update.effective_chat is None or update.message is None:
-        return
-
-    chat_id = str(update.effective_chat.id)
-    active_prompt = prompt_repository.get_for_chat(chat_id)
-    preview = active_prompt[:800] + ("..." if len(active_prompt) > 800 else "")
-    await update.message.reply_text(f"📝 Активний prompt для цього чату:\n\n{preview}")
-
-
-async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show the available bot commands and their descriptions."""
-    if update.message is None:
-        return
-
-    help_text = (
-        "📖 Доступні команди:\n\n"
-        "/start — зареєструвати цей чат у боті\n"
-        "/help — показати список команд\n"
-        "/runjob — негайно запустити обробку новин\n"
-        "/news — те саме, що /runjob\n"
-        "/settopic — встановити поточну тему форуму для надсилання новин\n"
-        "/addrss <url1>, <url2> — додати один або кілька RSS-лінків для цього чату\n"
-        "/listfeeds — показати RSS-лінки цього чату\n"
-        "/setprompt <текст> — зберегти власний prompt для цього чату\n"
-        "/resetprompt — повернути використання стандартного prompt.txt\n"
-        "/prompt — показати активний prompt цього чату"
-    )
-    await update.message.reply_text(help_text)
+    return telegram_bot, scheduler_service, bot_commands
 
 
 async def main():
@@ -176,22 +51,24 @@ async def main():
     if not TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_TOKEN is not configured.")
 
+    telegram_bot, scheduler_service, bot_commands = build_app()
+
     # Load chats from DB
     await telegram_bot.load_chats_from_db()
     print(f"📋 Активні чати: {telegram_bot.chats}")
 
     # Setup Telegram bot handlers
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('runjob', run_job_now))
-    application.add_handler(CommandHandler('news', run_job_now))
-    application.add_handler(CommandHandler('settopic', set_topic_id))
-    application.add_handler(CommandHandler('addrss', add_rss_link))
-    application.add_handler(CommandHandler('listfeeds', list_rss_links))
-    application.add_handler(CommandHandler('setprompt', set_prompt))
-    application.add_handler(CommandHandler('resetprompt', reset_prompt))
-    application.add_handler(CommandHandler('prompt', show_prompt))
-    application.add_handler(CommandHandler('help', show_help))
+    application.add_handler(CommandHandler('start', bot_commands.start))
+    application.add_handler(CommandHandler('runjob', bot_commands.run_job_now))
+    application.add_handler(CommandHandler('news', bot_commands.run_job_now))
+    application.add_handler(CommandHandler('settopic', bot_commands.set_topic_id))
+    application.add_handler(CommandHandler('addrss', bot_commands.add_rss_link))
+    application.add_handler(CommandHandler('listfeeds', bot_commands.list_rss_links))
+    application.add_handler(CommandHandler('setprompt', bot_commands.set_prompt))
+    application.add_handler(CommandHandler('resetprompt', bot_commands.reset_prompt))
+    application.add_handler(CommandHandler('prompt', bot_commands.show_prompt))
+    application.add_handler(CommandHandler('help', bot_commands.show_help))
 
     async def run_scheduler_background():
         """Run scheduler in background without blocking."""

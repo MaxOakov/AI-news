@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 import asyncio
 import schedule
 
-from app.news_pipeline import NewsPipeline, news_pipeline
+from app.news_pipeline import NewsPipeline
 
 
 def get_kyiv_timezone():
@@ -109,8 +109,3 @@ class SchedulerService:
 
         # Запуск _loop у глобальному loop
         await self._loop()
-
-
-# Shared instance, wired to the shared news_pipeline singleton.
-# A later phase moves this construction into main.py's composition root.
-scheduler_service = SchedulerService(news_pipeline)

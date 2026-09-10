@@ -1,9 +1,7 @@
-from app.db import article_repository
 from app.db.article_repository import ArticleRepository
-from app.services import rss_feed_service, news_generator
 from app.services.rss_service import RssFeedService
 from app.services.news_generator import NewsGenerator
-from app.telegram_bot import telegram_bot, TelegramBot
+from app.telegram_bot import TelegramBot
 
 
 class NewsPipeline:
@@ -54,8 +52,3 @@ class NewsPipeline:
                 print(f"📊 Відправлено в чат {chat_id}")
             else:
                 print(f"❌ Не вдалося відправити статтю в чат {chat_id}")
-
-
-# Shared instance, wired to the shared services/repositories/bot singletons.
-# A later phase moves this construction into main.py's composition root.
-news_pipeline = NewsPipeline(rss_feed_service, news_generator, article_repository, telegram_bot)

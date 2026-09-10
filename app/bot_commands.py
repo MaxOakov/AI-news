@@ -1,3 +1,5 @@
+import asyncio
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -152,7 +154,7 @@ class BotCommands:
         saved, failed = [], []
         for rss_url in rss_urls:
             try:
-                self._rss_links.save(chat_id, rss_url)
+                await asyncio.to_thread(self._rss_links.save, chat_id, rss_url)
                 saved.append(rss_url)
             except Exception:
                 failed.append(rss_url)
@@ -189,7 +191,7 @@ class BotCommands:
         removed, failed = [], []
         for rss_url in rss_urls:
             try:
-                self._rss_links.remove(chat_id, rss_url)
+                await asyncio.to_thread(self._rss_links.remove, chat_id, rss_url)
                 removed.append(rss_url)
             except Exception:
                 failed.append(rss_url)
@@ -209,7 +211,7 @@ class BotCommands:
             return
 
         chat_id = str(update.effective_chat.id)
-        links = self._rss_links.get_for_chat(chat_id)
+        links = await asyncio.to_thread(self._rss_links.get_for_chat, chat_id)
         if not links:
             await update.message.reply_text("📭 Для цього чату не збережено жодного RSS-лінка.")
             return
@@ -231,7 +233,7 @@ class BotCommands:
         custom_prompt = " ".join(context.args)
         chat_id = str(update.effective_chat.id)
         try:
-            self._prompts.save_custom(chat_id, custom_prompt)
+            await asyncio.to_thread(self._prompts.save_custom, chat_id, custom_prompt)
         except InvalidPromptError as e:
             await update.message.reply_text(f"❌ Некоректний prompt: {e}")
             return
@@ -245,7 +247,7 @@ class BotCommands:
             return
 
         chat_id = str(update.effective_chat.id)
-        self._prompts.reset_custom(chat_id)
+        await asyncio.to_thread(self._prompts.reset_custom, chat_id)
         await update.message.reply_text("✅ Користувацький prompt скинуто. Знову використовується prompt.txt.")
 
     async def show_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -254,7 +256,7 @@ class BotCommands:
             return
 
         chat_id = str(update.effective_chat.id)
-        active_prompt = self._prompts.get_for_chat(chat_id)
+        active_prompt = await asyncio.to_thread(self._prompts.get_for_chat, chat_id)
         preview = active_prompt[:800] + ("..." if len(active_prompt) > 800 else "")
         await update.message.reply_text(f"📝 Активний prompt для цього чату:\n\n{preview}")
 

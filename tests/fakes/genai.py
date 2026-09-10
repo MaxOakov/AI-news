@@ -1,6 +1,6 @@
 """A minimal stand-in for google.genai.Client, shaped just enough to satisfy
-NewsGenerator._generate_content's `client.models.generate_content(...)` call
-and its `.candidates[0].content.parts[0].text` response shape.
+NewsGenerator._generate_content's `client.aio.models.generate_content(...)`
+call and its `.candidates[0].content.parts[0].text` response shape.
 """
 from types import SimpleNamespace
 
@@ -12,7 +12,7 @@ class FakeGenAIClient:
         self._fail_times = 0
         self._exception_factory = lambda: RuntimeError("simulated Gemini failure")
         self._empty_times = 0
-        self.models = _FakeModels(self)
+        self.aio = SimpleNamespace(models=_FakeModels(self))
 
     def set_response(self, text: str):
         self._response_text = text
@@ -32,7 +32,7 @@ class _FakeModels:
     def __init__(self, client: FakeGenAIClient):
         self._client = client
 
-    def generate_content(self, model, contents):
+    async def generate_content(self, model, contents):
         self._client.calls.append((model, contents))
         call_index = len(self._client.calls)
 

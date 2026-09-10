@@ -27,7 +27,7 @@ class TelegramBot:
     async def load_chats_from_db(self):
         """Load all active chats from MongoDB on startup."""
         try:
-            active_chats = self._chat_repository.get_all_active()
+            active_chats = await asyncio.to_thread(self._chat_repository.get_all_active)
             async with self._chats_lock:
                 self.chats.clear()
                 for chat in active_chats:
@@ -59,11 +59,11 @@ class TelegramBot:
                 if existing is not None:
                     chat.message_thread_id = existing.message_thread_id
                 else:
-                    stored = self._chat_repository.get(chat.chat_id)
+                    stored = await asyncio.to_thread(self._chat_repository.get, chat.chat_id)
                     if stored is not None:
                         chat.message_thread_id = stored.message_thread_id
 
-            self._chat_repository.register(chat)
+            await asyncio.to_thread(self._chat_repository.register, chat)
             async with self._chats_lock:
                 self.chats[chat.chat_id] = chat
             print(f"✅ Чат додано: {chat_name} ({chat_id})")
@@ -80,7 +80,7 @@ class TelegramBot:
         everything intact.
         """
         try:
-            self._chat_repository.deactivate(str(chat_id))
+            await asyncio.to_thread(self._chat_repository.deactivate, str(chat_id))
             async with self._chats_lock:
                 self.chats.pop(str(chat_id), None)
             print(f"⏹ Чат деактивовано: {chat_id}")

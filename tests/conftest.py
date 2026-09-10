@@ -3,6 +3,8 @@
 Everything here is built from fakes (tests/fakes/) so no test ever touches
 a real MongoDB, Gemini, or Telegram connection.
 """
+import asyncio as _real_asyncio
+import time as _real_time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -35,16 +37,42 @@ __all__ = ["make_update", "make_context"]
 # --------------------------------------------------------------------------
 # Retry-sleep suppression: no test should ever actually block on a retry's
 # backoff delay. Autouse so no test author has to remember to request it.
+#
+# IMPORTANT: `app.retry.time` and `app.retry.asyncio` are the *same shared
+# module objects* as the real `time`/`asyncio` modules everywhere else in
+# the process (an `import time` binds the name to that one singleton, it
+# doesn't copy it). So `monkeypatch.setattr("app.retry.time.sleep", ...)`
+# would mutate `time.sleep` for the *entire test session*, not just inside
+# app.retry, silently breaking every other test's real sleeps (including
+# tests that deliberately use time.sleep/asyncio.sleep to prove concurrency
+# works). Instead, replace the *name* `time`/`asyncio` inside each module's
+# own namespace with a thin proxy whose `sleep` is instant but everything
+# else (create_task, CancelledError, Semaphore, gather, ...) still
+# delegates to the real module.
 # --------------------------------------------------------------------------
-@pytest.fixture(autouse=True)
-def no_sleep(monkeypatch):
-    monkeypatch.setattr("app.retry.time.sleep", lambda *a, **k: None)
+class _FakeTimeModule:
+    def __getattr__(self, name):
+        return getattr(_real_time, name)
 
-    async def _instant_async_sleep(*a, **k):
+    @staticmethod
+    def sleep(seconds):
         return None
 
-    monkeypatch.setattr("app.retry.asyncio.sleep", _instant_async_sleep)
-    monkeypatch.setattr("app.scheduler.asyncio.sleep", _instant_async_sleep)
+
+class _FakeAsyncioModule:
+    def __getattr__(self, name):
+        return getattr(_real_asyncio, name)
+
+    @staticmethod
+    async def sleep(seconds):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch):
+    monkeypatch.setattr("app.retry.time", _FakeTimeModule())
+    monkeypatch.setattr("app.retry.asyncio", _FakeAsyncioModule())
+    monkeypatch.setattr("app.scheduler.asyncio", _FakeAsyncioModule())
 
 
 # --------------------------------------------------------------------------

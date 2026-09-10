@@ -1,6 +1,6 @@
 import feedparser
 import datetime
-from app.mongo import article_exists, create_article, get_chat_rss_links
+from app.db import article_repository, rss_link_repository
 from app.models import Article
 from app.retry import retry
 
@@ -8,7 +8,7 @@ from app.retry import retry
 # Read RSS links per chat from MongoDB, no global file state.
 def get_chat_rss_feeds(chat_id):
     """Return all active RSS URLs for a specific chat."""
-    links = get_chat_rss_links(str(chat_id))
+    links = rss_link_repository.get_for_chat(str(chat_id))
     urls = []
     for item in links:
         url = str(item.get("url", "")).strip()
@@ -32,7 +32,7 @@ def _parse_and_store_feed(url, chat_id):
     feed = feedparser.parse(url)
     for entry in feed.entries[:1]:
         if hasattr(entry, 'published_parsed'):
-            if article_exists(entry.title, chat_id):
+            if article_repository.exists(entry.title, chat_id):
                 print(f"Пропускаємо. Стаття '{entry.title}' вже існує для чату {chat_id}.")
                 continue
             article = Article(
@@ -43,7 +43,7 @@ def _parse_and_store_feed(url, chat_id):
                 is_sent=False,
                 chat_id=str(chat_id),
             )
-            create_article([article], chat_id=str(chat_id))
+            article_repository.create([article], chat_id=str(chat_id))
             print(f"Збережено нову статтю для чату {chat_id}: '{entry.title}'")
 
 

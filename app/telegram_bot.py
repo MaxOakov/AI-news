@@ -1,6 +1,7 @@
 from telegram import Bot
 from app.config import TELEGRAM_TOKEN
-from app.mongo import register_chat, get_all_active_chats
+from app.db import chat_repository as default_chat_repository
+from app.db.chat_repository import ChatRepository
 from app.models import Chat
 from app.retry import retry_async
 import asyncio
@@ -18,16 +19,17 @@ async def _send_once(bot: Bot, payload: dict):
 
 
 class TelegramBot:
-    def __init__(self, token: str):
+    def __init__(self, token: str, chat_repository: ChatRepository | None = None):
         self.token = token
         self.bot = Bot(token=token) if token else None
         self.chats: dict[str, Chat] = {}
         self._chats_lock = asyncio.Lock()
+        self._chat_repository = chat_repository or default_chat_repository
 
     async def load_chats_from_db(self):
         """Load all active chats from MongoDB on startup."""
         try:
-            active_chats = get_all_active_chats()
+            active_chats = self._chat_repository.get_all_active()
             async with self._chats_lock:
                 self.chats.clear()
                 for chat in active_chats:
@@ -45,7 +47,7 @@ class TelegramBot:
                 chat_type=chat_type,
                 message_thread_id=message_thread_id,
             )
-            register_chat(chat)
+            self._chat_repository.register(chat)
             async with self._chats_lock:
                 # register_chat() only writes message_thread_id to MongoDB
                 # when it's set, so a plain /start after /settopic doesn't

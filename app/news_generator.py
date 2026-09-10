@@ -1,6 +1,6 @@
 from google import genai
 from app.config import GEMINI_MODEL
-from app.mongo import get_prompt_for_chat
+from app.db import prompt_repository
 from app.models import Article
 from app.retry import retry
 
@@ -37,7 +37,7 @@ def generate_news(article: Article, chat_id=None):
     Генерує текст новини через GEMINI API з retry механізмом.
     Якщо для чату є custom prompt, він має пріоритет над prompt.txt.
     """
-    prompt_template = get_prompt_for_chat(str(chat_id)) if chat_id is not None else get_prompt_for_chat("default")
+    prompt_template = prompt_repository.get_for_chat(str(chat_id)) if chat_id is not None else prompt_repository.get_for_chat("default")
 
     prompt = prompt_template.format(
         title=article.title,

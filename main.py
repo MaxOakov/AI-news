@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from app.telegram_bot import telegram_bot
 from app.config import TELEGRAM_TOKEN
 from app.scheduler import start_scheduler, trigger_job_now
-from app.mongo import save_rss_link, get_chat_rss_links, save_chat_prompt, reset_chat_prompt, get_chat_prompt, get_prompt_for_chat
+from app.db import rss_link_repository, prompt_repository
 
 logging.basicConfig(level=logging.INFO)
 
@@ -91,7 +91,7 @@ async def add_rss_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = str(update.effective_chat.id)
     for rss_url in rss_urls:
-        save_rss_link(chat_id, rss_url)
+        rss_link_repository.save(chat_id, rss_url)
 
     await update.message.reply_text(
         f"✅ Збережено RSS-лінків для цього чату: {len(rss_urls)}\n"
@@ -105,7 +105,7 @@ async def list_rss_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = str(update.effective_chat.id)
-    links = get_chat_rss_links(chat_id)
+    links = rss_link_repository.get_for_chat(chat_id)
     if not links:
         await update.message.reply_text("📭 Для цього чату не збережено жодного RSS-лінка.")
         return
@@ -125,7 +125,7 @@ async def set_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     custom_prompt = " ".join(context.args)
     chat_id = str(update.effective_chat.id)
-    save_chat_prompt(chat_id, custom_prompt)
+    prompt_repository.save_custom(chat_id, custom_prompt)
     await update.message.reply_text("✅ Користувацький prompt для цього чату збережено. Тепер він буде використовуватися замість prompt.txt.")
 
 
@@ -135,7 +135,7 @@ async def reset_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = str(update.effective_chat.id)
-    reset_chat_prompt(chat_id)
+    prompt_repository.reset_custom(chat_id)
     await update.message.reply_text("✅ Користувацький prompt скинуто. Знову використовується prompt.txt.")
 
 
@@ -145,7 +145,7 @@ async def show_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = str(update.effective_chat.id)
-    active_prompt = get_prompt_for_chat(chat_id)
+    active_prompt = prompt_repository.get_for_chat(chat_id)
     preview = active_prompt[:800] + ("..." if len(active_prompt) > 800 else "")
     await update.message.reply_text(f"📝 Активний prompt для цього чату:\n\n{preview}")
 

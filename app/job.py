@@ -2,7 +2,7 @@ import asyncio
 from app.rss_parser import fetch_articles_for_chat, get_chat_rss_feeds
 from app.news_generator import generate_news
 from app.telegram_bot import telegram_bot
-from app.mongo import get_article, mark_article_as_sent
+from app.db import article_repository
 
 
 async def job():
@@ -14,7 +14,7 @@ async def job():
             continue
 
         fetch_articles_for_chat(chat_id, rss_feeds)
-        selected_article = get_article(chat_id)
+        selected_article = article_repository.get_next_unsent(chat_id)
         if not selected_article:
             print(f"❌ Немає нових статей для відправки в чат {chat_id}")
             continue
@@ -28,7 +28,7 @@ async def job():
         )
 
         if sent:
-            mark_article_as_sent(selected_article.id)
+            article_repository.mark_as_sent(selected_article.id)
             print(f"📊 Відправлено в чат {chat_id}")
         else:
             print(f"❌ Не вдалося відправити статтю в чат {chat_id}")

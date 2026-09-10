@@ -1,12 +1,34 @@
 from google import genai
-import time
 from app.config import GEMINI_MODEL
 from app.mongo import get_prompt_for_chat
+from app.retry import retry
 
 
 # Ініціалізація клієнта Ggoogle Gemini API та Telegram-бота
 client = genai.Client()
 print("Клієнт Gemini ініціалізовано.")
+
+
+class EmptyGenerationError(Exception):
+    """Gemini returned a response with no candidates."""
+
+
+@retry(
+    max_retries=3,
+    delay=2,
+    on_retry=lambda exc, attempt, total, *a, **kw: print(
+        f"⚠️ Помилка при генерації новини (спроба {attempt}/{total}): {exc}"
+    ),
+    on_failure=lambda exc, *a, **kw: print("⏹ Вичерпані всі спроби генерації новини."),
+)
+def _generate_content(prompt):
+    response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+    if not response.candidates:
+        # Treat an empty response the same as a transient failure so it
+        # goes through the same retry+backoff path instead of looping
+        # immediately with no delay.
+        raise EmptyGenerationError("Gemini повернув порожню відповідь.")
+    return response.candidates[0].content.parts[0].text.strip()
 
 
 def generate_news(article, chat_id=None):
@@ -22,21 +44,9 @@ def generate_news(article, chat_id=None):
         url=article["url"]
     )
 
-    max_retries = 3
-    for retry_count in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt
-            )
-            if response.candidates:
-                print(f"Статтю '{article['title']}' переписано")
-                return response.candidates[0].content.parts[0].text.strip()
-        except Exception as e:
-            print(f"⚠️ Помилка при генерації новини (спроба {retry_count + 1}/{max_retries}): {e}")
-            if retry_count < max_retries - 1:
-                time.sleep(2)  # Затримка перед повторною спробою
-            else:
-                print("⏹ Вичерпані всі спроби генерації новини.")
+    text = _generate_content(prompt)
+    if text is None:
+        return "⚠️ Gemini не повернув текст."
 
-    return "⚠️ Gemini не повернув текст."
+    print(f"Статтю '{article['title']}' переписано")
+    return text

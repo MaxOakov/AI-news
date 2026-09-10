@@ -1,8 +1,8 @@
 from pathlib import Path
 from app.config import MONGODB_URL
+from app.retry import retry
 from pymongo import MongoClient
 from datetime import datetime
-import time
 
 
 client = None
@@ -41,29 +41,43 @@ def get_db():
 
 
 
+@retry(
+    max_retries=3,
+    delay=1,
+    on_retry=lambda exc, attempt, total, *a, **kw: print(
+        f"⚠️ Помилка при збереженні статті (спроба {attempt}/{total}): {exc}"
+    ),
+)
+def _insert_article(news_collection, article):
+    result = news_collection.insert_one(article)
+    print(f"Стаття збережена з id: {result.inserted_id}")
+
+
 def create_article(new_articles, chat_id=None):
     """Зберігає статтю в MongoDB з retry механізмом."""
-    max_retries = 3
     news_collection = get_db().articles
     for article in new_articles:
         if chat_id is not None:
             article["chat_id"] = str(chat_id)
-        for retry_count in range(max_retries):
-            try:
-                result = news_collection.insert_one(article)
-                print(f"Стаття збережена з id: {result.inserted_id}")
-                break
-            except Exception as e:
-                print(f"⚠️ Помилка при збереженні статті (спроба {retry_count + 1}/{max_retries}): {e}")
-                if retry_count < max_retries - 1:
-                    time.sleep(1)
-                else:
-                    print(f"⏹ Не вдалося зберегти статтю: {article.get('title', 'Unknown')}")
+        try:
+            _insert_article(news_collection, article)
+        except Exception:
+            print(f"⏹ Не вдалося зберегти статтю: {article.get('title', 'Unknown')}")
+
+
+@retry(
+    max_retries=3,
+    delay=1,
+    on_retry=lambda exc, attempt, total, *a, **kw: print(
+        f"⚠️ Помилка при отриманні статті (спроба {attempt}/{total}): {exc}"
+    ),
+)
+def _find_article(query):
+    return get_db().articles.find_one(query, sort=[("published", -1)])
 
 
 def get_article(chat_id=None):
     """Отримує статтю з бази даних з retry механізмом."""
-    max_retries = 3
     query = {
         "$or": [
             {"is_sent": False},
@@ -74,39 +88,35 @@ def get_article(chat_id=None):
     if chat_id is not None:
         query["chat_id"] = str(chat_id)
 
-    for retry_count in range(max_retries):
-        try:
-            saved_articles = get_db().articles.find_one(
-                query,
-                sort=[("published", -1)]
-            )
-            return saved_articles
-        except Exception as e:
-            print(f"⚠️ Помилка при отриманні статті (спроба {retry_count + 1}/{max_retries}): {e}")
-            if retry_count < max_retries - 1:
-                time.sleep(1)
-            else:
-                print("⏹ Не вдалося отримати статтю з бази даних.")
-                return None
+    try:
+        return _find_article(query)
+    except Exception:
+        print("⏹ Не вдалося отримати статтю з бази даних.")
+        return None
+
+
+@retry(
+    max_retries=3,
+    delay=1,
+    on_retry=lambda exc, attempt, total, *a, **kw: print(
+        f"⚠️ Помилка при перевірці статті (спроба {attempt}/{total}): {exc}"
+    ),
+)
+def _count_articles(query):
+    news_collection = get_db().articles
+    return news_collection.count_documents(query, limit=1)
 
 
 def article_exists(title, chat_id=None):
     """Перевіряє, чи існує стаття з таким заголовком в базі даних з retry механізмом."""
-    max_retries = 3
-    news_collection = get_db().articles
     query = {"title": title}
     if chat_id is not None:
         query["chat_id"] = str(chat_id)
-    for retry_count in range(max_retries):
-        try:
-            return news_collection.count_documents(query, limit=1) != 0
-        except Exception as e:
-            print(f"⚠️ Помилка при перевірці статті (спроба {retry_count + 1}/{max_retries}): {e}")
-            if retry_count < max_retries - 1:
-                time.sleep(1)
-            else:
-                print(f"⏹ Не вдалося перевірити наявність статті: {title}")
-                return False
+    try:
+        return _count_articles(query) != 0
+    except Exception:
+        print(f"⏹ Не вдалося перевірити наявність статті: {title}")
+        return False
 
 
 def mark_article_as_sent(article_id):

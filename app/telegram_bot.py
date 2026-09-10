@@ -1,7 +1,19 @@
 from telegram import Bot
 from app.config import TELEGRAM_TOKEN
 from app.mongo import register_chat, get_all_active_chats
+from app.retry import retry_async
 import asyncio
+
+
+@retry_async(
+    max_retries=3,
+    delay=2,
+    on_retry=lambda exc, attempt, total, bot, payload: print(
+        f"⚠️ Помилка при відправці (спроба {attempt}/{total}): {exc}"
+    ),
+)
+async def _send_once(bot: Bot, payload: dict):
+    await bot.send_message(**payload)
 
 
 class TelegramBot:
@@ -9,7 +21,6 @@ class TelegramBot:
         self.token = token
         self.bot = Bot(token=token) if token else None
         self.chats = {}
-        self.max_retries = 3
         self._chats_lock = asyncio.Lock()
 
     async def load_chats_from_db(self):
@@ -66,18 +77,13 @@ class TelegramBot:
             except (TypeError, ValueError):
                 payload.pop("message_thread_id", None)
 
-        retry_count = 0
-        while retry_count < self.max_retries:
-            try:
-                await self.bot.send_message(**payload)
-                print(f"📨 Повідомлення надіслано в чат {chat_id} (topic: {message_thread_id})")
-                return True
-            except Exception as e:
-                retry_count += 1
-                print(f"⚠️ Помилка при відправці (спроба {retry_count}): {e}")
-                if retry_count < self.max_retries:
-                    await asyncio.sleep(2)
-        return False
+        try:
+            await _send_once(self.bot, payload)
+        except Exception:
+            return False
+
+        print(f"📨 Повідомлення надіслано в чат {chat_id} (topic: {message_thread_id})")
+        return True
 
     async def send_to_all_chats(self, text: str, parse_mode: str = "HTML") -> dict:
         """Broadcast message to all active chats, using topic id when available."""

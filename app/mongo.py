@@ -1,5 +1,6 @@
 from pathlib import Path
 from app.config import MONGODB_URL
+from app.models import Article, Chat
 from app.retry import retry
 from pymongo import MongoClient
 from datetime import datetime
@@ -48,21 +49,22 @@ def get_db():
         f"⚠️ Помилка при збереженні статті (спроба {attempt}/{total}): {exc}"
     ),
 )
-def _insert_article(news_collection, article):
-    result = news_collection.insert_one(article)
+def _insert_article(news_collection, article: Article):
+    result = news_collection.insert_one(article.to_dict())
+    article.id = result.inserted_id
     print(f"Стаття збережена з id: {result.inserted_id}")
 
 
-def create_article(new_articles, chat_id=None):
+def create_article(new_articles: list[Article], chat_id=None):
     """Зберігає статтю в MongoDB з retry механізмом."""
     news_collection = get_db().articles
     for article in new_articles:
         if chat_id is not None:
-            article["chat_id"] = str(chat_id)
+            article.chat_id = str(chat_id)
         try:
             _insert_article(news_collection, article)
         except Exception:
-            print(f"⏹ Не вдалося зберегти статтю: {article.get('title', 'Unknown')}")
+            print(f"⏹ Не вдалося зберегти статтю: {article.title}")
 
 
 @retry(
@@ -76,7 +78,7 @@ def _find_article(query):
     return get_db().articles.find_one(query, sort=[("published", -1)])
 
 
-def get_article(chat_id=None):
+def get_article(chat_id=None) -> Article | None:
     """Отримує статтю з бази даних з retry механізмом."""
     query = {
         "$or": [
@@ -89,10 +91,12 @@ def get_article(chat_id=None):
         query["chat_id"] = str(chat_id)
 
     try:
-        return _find_article(query)
+        doc = _find_article(query)
     except Exception:
         print("⏹ Не вдалося отримати статтю з бази даних.")
         return None
+
+    return Article.from_dict(doc) if doc else None
 
 
 @retry(
@@ -141,33 +145,28 @@ def get_latest_article_time():
     return None
 
 
-# Add these functions to mongo.py
-def register_chat(chat_id: str, chat_name: str, chat_type: str = "private", message_thread_id: int | None = None):
-    """Save chat to DB, including optional forum topic id."""
-    chats_collection = get_db().chats
-    payload = {
-        "chat_id": str(chat_id),
-        "chat_name": chat_name,
-        "chat_type": chat_type,
-        "is_active": True,
-    }
-    if message_thread_id is not None:
-        payload["message_thread_id"] = int(message_thread_id)
+def register_chat(chat: Chat):
+    """Save chat to DB, including optional forum topic id.
 
+    `message_thread_id` is only written when Chat.to_dict() includes it, so
+    registering a chat again without one (e.g. a plain /start) never clears
+    a topic id set earlier via /settopic.
+    """
+    chats_collection = get_db().chats
     return chats_collection.update_one(
-        {"chat_id": str(chat_id)},
+        {"chat_id": chat.chat_id},
         {
-            "$set": payload,
+            "$set": chat.to_dict(),
             "$setOnInsert": {"added_at": datetime.now()}
         },
         upsert=True
     )
 
 
-def get_all_active_chats():
+def get_all_active_chats() -> list[Chat]:
     """Retrieve all active chats from DB."""
     chats_collection = get_db().chats
-    return list(chats_collection.find({"is_active": True}))
+    return [Chat.from_dict(doc) for doc in chats_collection.find({"is_active": True})]
 
 
 def deactivate_chat(chat_id: str):

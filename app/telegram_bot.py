@@ -1,6 +1,7 @@
 from telegram import Bot
 from app.config import TELEGRAM_TOKEN
 from app.mongo import register_chat, get_all_active_chats
+from app.models import Chat
 from app.retry import retry_async
 import asyncio
 
@@ -20,7 +21,7 @@ class TelegramBot:
     def __init__(self, token: str):
         self.token = token
         self.bot = Bot(token=token) if token else None
-        self.chats = {}
+        self.chats: dict[str, Chat] = {}
         self._chats_lock = asyncio.Lock()
 
     async def load_chats_from_db(self):
@@ -30,11 +31,7 @@ class TelegramBot:
             async with self._chats_lock:
                 self.chats.clear()
                 for chat in active_chats:
-                    chat_id = str(chat["chat_id"])
-                    self.chats[chat_id] = {
-                        "chat_name": chat.get("chat_name") or "Unknown chat",
-                        "message_thread_id": chat.get("message_thread_id")
-                    }
+                    self.chats[chat.chat_id] = chat
             print(f"✅ Завантажено {len(self.chats)} чатів з БД")
         except Exception as e:
             print(f"❌ Помилка при завантаженні чатів: {e}")
@@ -42,12 +39,22 @@ class TelegramBot:
     async def register_chat_db(self, chat_id: str, chat_name: str, chat_type: str = "private", message_thread_id: int | None = None):
         """Register chat in DB and add to memory."""
         try:
-            register_chat(str(chat_id), chat_name, chat_type, message_thread_id)
+            chat = Chat(
+                chat_id=str(chat_id),
+                chat_name=chat_name,
+                chat_type=chat_type,
+                message_thread_id=message_thread_id,
+            )
+            register_chat(chat)
             async with self._chats_lock:
-                self.chats[str(chat_id)] = {
-                    "chat_name": chat_name,
-                    "message_thread_id": message_thread_id
-                }
+                # register_chat() only writes message_thread_id to MongoDB
+                # when it's set, so a plain /start after /settopic doesn't
+                # clobber the stored topic id. Mirror that here: don't let
+                # a None from this call erase a topic id already cached.
+                existing = self.chats.get(chat.chat_id)
+                if chat.message_thread_id is None and existing is not None:
+                    chat.message_thread_id = existing.message_thread_id
+                self.chats[chat.chat_id] = chat
             print(f"✅ Чат додано: {chat_name} ({chat_id})")
             return True
         except Exception as e:
@@ -91,15 +98,12 @@ class TelegramBot:
             chat_items = list(self.chats.items())
 
         results = {}
-        for chat_id, chat_data in chat_items:
-            message_thread_id = chat_data.get("message_thread_id") if isinstance(chat_data, dict) else None
-            if message_thread_id in (None, ""):
-                message_thread_id = None
+        for chat_id, chat in chat_items:
             results[chat_id] = await self.send_message(
                 chat_id,
                 text,
                 parse_mode,
-                message_thread_id=message_thread_id,
+                message_thread_id=chat.message_thread_id,
             )
         return results
 

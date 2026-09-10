@@ -1,6 +1,7 @@
 import feedparser
 import datetime
 from app.mongo import article_exists, create_article, get_chat_rss_links
+from app.models import Article
 from app.retry import retry
 
 
@@ -34,14 +35,15 @@ def _parse_and_store_feed(url, chat_id):
             if article_exists(entry.title, chat_id):
                 print(f"Пропускаємо. Стаття '{entry.title}' вже існує для чату {chat_id}.")
                 continue
-            create_article([{
-                "title": entry.title,
-                "url": entry.link,
-                "summary": getattr(entry, 'summary', ''),
-                "published": datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc),
-                "is_sent": False,
-                "chat_id": str(chat_id),
-            }], chat_id=str(chat_id))
+            article = Article(
+                title=entry.title,
+                url=entry.link,
+                summary=getattr(entry, 'summary', ''),
+                published=datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc),
+                is_sent=False,
+                chat_id=str(chat_id),
+            )
+            create_article([article], chat_id=str(chat_id))
             print(f"Збережено нову статтю для чату {chat_id}: '{entry.title}'")
 
 

@@ -24,6 +24,16 @@ def test_to_dict_with_chat_id_and_id():
     assert data["_id"] == "abc123"
 
 
+def test_to_dict_without_guid_omits_key():
+    article = Article(title="T", url="https://x")
+    assert "guid" not in article.to_dict()
+
+
+def test_to_dict_with_guid():
+    article = Article(title="T", url="https://x", guid="feed-guid-1")
+    assert article.to_dict()["guid"] == "feed-guid-1"
+
+
 def test_from_dict_round_trip_full_doc():
     published = datetime(2026, 1, 1, tzinfo=timezone.utc)
     doc = {
@@ -53,7 +63,13 @@ def test_from_dict_missing_keys_default_safely():
     assert article.published is None
     assert article.is_sent is False
     assert article.chat_id is None
+    assert article.guid is None
     assert article.id is None
+
+
+def test_from_dict_reads_guid():
+    article = Article.from_dict({"title": "T", "url": "https://x", "guid": "feed-guid-1"})
+    assert article.guid == "feed-guid-1"
 
 
 def test_from_dict_null_summary_defaults_to_empty_string():

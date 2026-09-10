@@ -20,6 +20,7 @@ class Article:
     published: datetime | None = None
     is_sent: bool = False
     chat_id: str | None = None
+    guid: str | None = None  # feed entry's stable id (or link, as a fallback)
     id: Any = None  # Mongo's `_id`; unset until the article is inserted.
 
     def to_dict(self) -> dict:
@@ -33,6 +34,8 @@ class Article:
         }
         if self.chat_id is not None:
             data["chat_id"] = self.chat_id
+        if self.guid is not None:
+            data["guid"] = self.guid
         if self.id is not None:
             data["_id"] = self.id
         return data
@@ -47,5 +50,6 @@ class Article:
             published=doc.get("published"),
             is_sent=bool(doc.get("is_sent", False)),
             chat_id=doc.get("chat_id"),
+            guid=doc.get("guid"),
             id=doc.get("_id"),
         )

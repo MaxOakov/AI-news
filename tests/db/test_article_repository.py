@@ -51,6 +51,27 @@ def test_get_next_unsent_returns_article_when_found(article_repository, sample_a
     assert result.title == sample_article.title
 
 
+def test_get_next_unsent_returns_oldest_first(article_repository):
+    from datetime import datetime, timezone
+
+    old = Article(title="Old", url="https://a", published=datetime(2020, 1, 1, tzinfo=timezone.utc))
+    newer = Article(title="Newer", url="https://b", published=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    newest = Article(title="Newest", url="https://c", published=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    # Insert out of chronological order to prove the query does the sorting.
+    article_repository.create([newest, old, newer])
+
+    first = article_repository.get_next_unsent()
+    assert first.title == "Old"
+
+    article_repository.mark_as_sent(first.id)
+    second = article_repository.get_next_unsent()
+    assert second.title == "Newer"
+
+    article_repository.mark_as_sent(second.id)
+    third = article_repository.get_next_unsent()
+    assert third.title == "Newest"
+
+
 def test_get_next_unsent_scopes_by_chat_id(article_repository, sample_article):
     article_repository.create([sample_article], chat_id="chat-a")
     assert article_repository.get_next_unsent(chat_id="chat-b") is None
@@ -83,6 +104,34 @@ def test_exists_retries_exhausted_returns_false(article_repository, monkeypatch)
 
     monkeypatch.setattr(article_repository._db.articles, "count_documents", always_fails)
     assert article_repository.exists("anything") is False
+
+
+def test_exists_by_guid_true_and_false(article_repository, sample_article):
+    sample_article.guid = "guid-1"
+    assert article_repository.exists_by_guid("guid-1") is False
+    article_repository.create([sample_article])
+    assert article_repository.exists_by_guid("guid-1") is True
+
+
+def test_exists_by_guid_scopes_by_chat_id(article_repository, sample_article):
+    sample_article.guid = "guid-1"
+    article_repository.create([sample_article], chat_id="chat-a")
+    assert article_repository.exists_by_guid("guid-1", chat_id="chat-b") is False
+    assert article_repository.exists_by_guid("guid-1", chat_id="chat-a") is True
+
+
+def test_exists_by_guid_different_titles_same_guid_is_a_duplicate(article_repository, sample_article):
+    sample_article.guid = "guid-1"
+    article_repository.create([sample_article])
+    assert article_repository.exists_by_guid("guid-1") is True
+
+
+def test_exists_by_guid_retries_exhausted_returns_false(article_repository, monkeypatch):
+    def always_fails(query, limit=None):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(article_repository._db.articles, "count_documents", always_fails)
+    assert article_repository.exists_by_guid("anything") is False
 
 
 def test_mark_as_sent_sets_flag(article_repository, sample_article):

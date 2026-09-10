@@ -9,7 +9,7 @@ A Telegram bot that turns RSS feeds into fan-style news posts. It fetches articl
 - **Per-chat custom prompts** — any chat can override the default `prompt.txt` with its own prompt.
 - **Scheduler** — runs once on startup, then every hour during active hours (08:00–22:00 Europe/Kyiv by default), skipping overlapping runs and retrying on transient (503) errors.
 - **Forum topic support** — a chat can pin news delivery to a specific forum topic via `/settopic`.
-- **Duplicate protection** — articles already sent to a chat aren't sent again (tracked in MongoDB).
+- **Duplicate protection** — new entries are matched by the feed's own entry id (falling back to its link, then its title), so a minor title edit or a repost doesn't slip past, and articles already sent to a chat aren't sent again (tracked in MongoDB).
 - **Persistence** — chats, RSS links, custom prompts, and sent/unsent articles are stored in MongoDB, so state survives restarts.
 
 ## Architecture
@@ -112,7 +112,7 @@ The commands below change shared chat configuration, so in group/supergroup chat
 | `/resetprompt` | Revert to the default `prompt.txt` |
 | `/stop` | Deactivate this chat's subscription (RSS feeds and custom prompt are kept; `/start` picks up where this left off) |
 
-Each scheduled or manually-triggered run: fetches new entries from every RSS feed registered for a chat, picks the newest unsent article, rewrites it with Gemini, and sends it to that chat.
+Each scheduled or manually-triggered run: fetches new entries from every RSS feed registered for a chat (up to the few most recent per feed per poll), picks the *oldest* unsent article so a backlog works down in order instead of newer items perpetually jumping the queue, rewrites it with Gemini, and sends it to that chat.
 
 ## Custom Prompts
 

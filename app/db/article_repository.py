@@ -39,10 +39,14 @@ class ArticleRepository:
         ),
     )
     def _find_unsent(self, query):
-        return self._db.articles.find_one(query, sort=[("published", -1)])
+        # Ascending: the OLDEST unsent article first, so a backlog that
+        # accumulates faster than it's sent (one per job run) works down in
+        # FIFO order instead of newer articles perpetually jumping the
+        # queue and starving older ones.
+        return self._db.articles.find_one(query, sort=[("published", 1)])
 
     def get_next_unsent(self, chat_id=None) -> Article | None:
-        """Отримує статтю з бази даних з retry механізмом."""
+        """Отримує найстарішу невідправлену статтю з бази даних з retry механізмом."""
         query = {
             "$or": [
                 {"is_sent": False},
@@ -80,6 +84,22 @@ class ArticleRepository:
             return self._count(query) != 0
         except Exception:
             print(f"⏹ Не вдалося перевірити наявність статті: {title}")
+            return False
+
+    def exists_by_guid(self, guid, chat_id=None) -> bool:
+        """Перевіряє, чи існує стаття з таким guid (feed entry id/link) в базі даних.
+
+        More reliable than exists(title, ...): a feed entry's id/link stays
+        stable even if its title gets a minor edit, and two unrelated
+        entries sharing a title won't be wrongly treated as duplicates.
+        """
+        query = {"guid": guid}
+        if chat_id is not None:
+            query["chat_id"] = str(chat_id)
+        try:
+            return self._count(query) != 0
+        except Exception:
+            print(f"⏹ Не вдалося перевірити наявність статті: {guid}")
             return False
 
     def mark_as_sent(self, article_id):

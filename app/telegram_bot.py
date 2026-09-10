@@ -45,17 +45,45 @@ class TelegramBot:
                 chat_type=chat_type,
                 message_thread_id=message_thread_id,
             )
+
+            if chat.message_thread_id is None:
+                # register() only writes message_thread_id to MongoDB when
+                # it's set, so a plain /start after /settopic doesn't
+                # clobber the stored topic id there. Mirror that here: don't
+                # let a None from this call erase a topic id we already
+                # know about, whether it's cached in-memory or (e.g. after
+                # /stop evicted this chat from the cache) still sitting in
+                # the database.
+                async with self._chats_lock:
+                    existing = self.chats.get(chat.chat_id)
+                if existing is not None:
+                    chat.message_thread_id = existing.message_thread_id
+                else:
+                    stored = self._chat_repository.get(chat.chat_id)
+                    if stored is not None:
+                        chat.message_thread_id = stored.message_thread_id
+
             self._chat_repository.register(chat)
             async with self._chats_lock:
-                # register_chat() only writes message_thread_id to MongoDB
-                # when it's set, so a plain /start after /settopic doesn't
-                # clobber the stored topic id. Mirror that here: don't let
-                # a None from this call erase a topic id already cached.
-                existing = self.chats.get(chat.chat_id)
-                if chat.message_thread_id is None and existing is not None:
-                    chat.message_thread_id = existing.message_thread_id
                 self.chats[chat.chat_id] = chat
             print(f"✅ Чат додано: {chat_name} ({chat_id})")
+            return True
+        except Exception as e:
+            print(f"❌ Помилка: {e}")
+            return False
+
+    async def deactivate_chat_db(self, chat_id: str) -> bool:
+        """Deactivate a chat in DB and drop it from the in-memory cache.
+
+        Unlike register_chat_db, this doesn't touch a chat's stored RSS
+        links or custom prompt, so a later /start reactivates it with
+        everything intact.
+        """
+        try:
+            self._chat_repository.deactivate(str(chat_id))
+            async with self._chats_lock:
+                self.chats.pop(str(chat_id), None)
+            print(f"⏹ Чат деактивовано: {chat_id}")
             return True
         except Exception as e:
             print(f"❌ Помилка: {e}")

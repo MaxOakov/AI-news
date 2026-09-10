@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from app.db.database import Database
+from app.retry import retry
 
 
 class RssLinkRepository:
@@ -9,6 +10,13 @@ class RssLinkRepository:
     def __init__(self, database: Database):
         self._db = database
 
+    @retry(
+        max_retries=3,
+        delay=1,
+        on_retry=lambda exc, attempt, total, *a, **kw: print(
+            f"⚠️ Помилка при збереженні RSS-лінка (спроба {attempt}/{total}): {exc}"
+        ),
+    )
     def save(self, chat_id: str, rss_url: str):
         """Store a single RSS feed URL for a chat."""
         normalized_url = rss_url.strip()
@@ -34,6 +42,13 @@ class RssLinkRepository:
         """Return all active RSS links across every chat."""
         return list(self._db.rss_links.find({"is_active": True}))
 
+    @retry(
+        max_retries=3,
+        delay=1,
+        on_retry=lambda exc, attempt, total, *a, **kw: print(
+            f"⚠️ Помилка при видаленні RSS-лінка (спроба {attempt}/{total}): {exc}"
+        ),
+    )
     def remove(self, chat_id: str, rss_url: str):
         """Remove a RSS link for a chat."""
         return self._db.rss_links.delete_one({"chat_id": str(chat_id), "url": rss_url.strip()})

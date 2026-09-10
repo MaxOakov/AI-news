@@ -74,6 +74,47 @@ async def test_register_chat_db_repository_failure_returns_false(telegram_bot, c
 
 
 # --------------------------------------------------------------------------
+# deactivate_chat_db
+# --------------------------------------------------------------------------
+async def test_deactivate_chat_db_removes_from_cache_and_deactivates_in_db(
+    telegram_bot, chat_repository
+):
+    await telegram_bot.register_chat_db("1", "Chat")
+    ok = await telegram_bot.deactivate_chat_db("1")
+    assert ok is True
+    assert "1" not in telegram_bot.chats
+    assert chat_repository.get_all_active() == []
+
+
+async def test_deactivate_chat_db_repository_failure_returns_false(
+    telegram_bot, chat_repository, monkeypatch
+):
+    await telegram_bot.register_chat_db("1", "Chat")
+
+    def boom(chat_id):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(chat_repository, "deactivate", boom)
+    ok = await telegram_bot.deactivate_chat_db("1")
+    assert ok is False
+    assert "1" in telegram_bot.chats  # unchanged on failure
+
+
+async def test_start_after_stop_preserves_topic_id_via_db_fallback(telegram_bot):
+    # Regression test: /stop evicts the chat from the in-memory cache, so a
+    # later plain /start (no explicit /settopic) has nothing cached to merge
+    # the topic id from. It must fall back to the database instead of
+    # silently losing message_thread_id for the rest of the process's life.
+    await telegram_bot.register_chat_db("1", "Chat", message_thread_id=42)
+    await telegram_bot.deactivate_chat_db("1")
+    assert "1" not in telegram_bot.chats
+
+    ok = await telegram_bot.register_chat_db("1", "Chat", message_thread_id=None)
+    assert ok is True
+    assert telegram_bot.chats["1"].message_thread_id == 42
+
+
+# --------------------------------------------------------------------------
 # send_message
 # --------------------------------------------------------------------------
 async def test_send_message_no_token_returns_false(chat_repository):

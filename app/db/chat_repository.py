@@ -2,6 +2,7 @@ from datetime import datetime
 
 from app.db.database import Database
 from app.models import Chat
+from app.retry import retry
 
 
 class ChatRepository:
@@ -10,6 +11,13 @@ class ChatRepository:
     def __init__(self, database: Database):
         self._db = database
 
+    @retry(
+        max_retries=3,
+        delay=1,
+        on_retry=lambda exc, attempt, total, *a, **kw: print(
+            f"⚠️ Помилка при реєстрації чату (спроба {attempt}/{total}): {exc}"
+        ),
+    )
     def register(self, chat: Chat):
         """Save chat to DB, including optional forum topic id.
 
@@ -30,6 +38,18 @@ class ChatRepository:
         """Retrieve all active chats from DB."""
         return [Chat.from_dict(doc) for doc in self._db.chats.find({"is_active": True})]
 
+    def get(self, chat_id: str) -> Chat | None:
+        """Retrieve a single chat by id, active or not."""
+        doc = self._db.chats.find_one({"chat_id": str(chat_id)})
+        return Chat.from_dict(doc) if doc else None
+
+    @retry(
+        max_retries=3,
+        delay=1,
+        on_retry=lambda exc, attempt, total, *a, **kw: print(
+            f"⚠️ Помилка при деактивації чату (спроба {attempt}/{total}): {exc}"
+        ),
+    )
     def deactivate(self, chat_id: str):
         """Mark chat as inactive."""
         return self._db.chats.update_one(

@@ -32,6 +32,19 @@ def test_register_with_new_topic_id_does_override(chat_repository, sample_chat_w
     assert doc["message_thread_id"] == 99
 
 
+def test_get_returns_none_when_not_found(chat_repository):
+    assert chat_repository.get("does-not-exist") is None
+
+
+def test_get_returns_chat_regardless_of_active_status(chat_repository, sample_chat_with_topic):
+    chat_repository.register(sample_chat_with_topic)
+    chat_repository.deactivate("123")
+    found = chat_repository.get("123")
+    assert found is not None
+    assert found.message_thread_id == 42
+    assert found.is_active is False
+
+
 def test_get_all_active_filters_and_converts(chat_repository):
     chat_repository._db.chats.docs.extend(
         [
@@ -50,3 +63,47 @@ def test_deactivate_sets_is_active_false(chat_repository, sample_chat):
     chat_repository.deactivate("123")
     doc = chat_repository._db.chats.docs[0]
     assert doc["is_active"] is False
+
+
+def test_register_retries_then_succeeds(chat_repository, sample_chat, monkeypatch):
+    calls = {"n": 0}
+    real_update_one = chat_repository._db.chats.update_one
+
+    def flaky_update_one(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RuntimeError("transient")
+        return real_update_one(*a, **kw)
+
+    monkeypatch.setattr(chat_repository._db.chats, "update_one", flaky_update_one)
+    chat_repository.register(sample_chat)
+    assert calls["n"] == 2
+    assert len(chat_repository._db.chats.docs) == 1
+
+
+def test_register_exhausted_retries_raises(chat_repository, sample_chat, monkeypatch):
+    import pytest
+
+    def always_fails(*a, **kw):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(chat_repository._db.chats, "update_one", always_fails)
+    with pytest.raises(RuntimeError, match="down"):
+        chat_repository.register(sample_chat)
+
+
+def test_deactivate_retries_then_succeeds(chat_repository, sample_chat, monkeypatch):
+    chat_repository.register(sample_chat)
+    calls = {"n": 0}
+    real_update_one = chat_repository._db.chats.update_one
+
+    def flaky_update_one(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RuntimeError("transient")
+        return real_update_one(*a, **kw)
+
+    monkeypatch.setattr(chat_repository._db.chats, "update_one", flaky_update_one)
+    chat_repository.deactivate("123")
+    assert calls["n"] == 2
+    assert chat_repository._db.chats.docs[0]["is_active"] is False

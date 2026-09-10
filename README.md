@@ -97,15 +97,22 @@ Add the bot to a Telegram chat/channel (as admin, if it's a channel) and registe
 |---|---|
 | `/start` | Register the current chat with the bot |
 | `/help` | List available commands |
-| `/runjob`, `/news` | Trigger a news run immediately |
-| `/settopic` | Pin news delivery to the current forum topic (must be run inside that topic) |
-| `/addrss <url1>, <url2>` | Add one or more RSS feeds for this chat |
+| `/runjob`, `/news` | Trigger a news run immediately, for this chat only |
 | `/listfeeds` | List RSS feeds registered for this chat |
-| `/setprompt <text>` | Use a custom prompt for this chat instead of `prompt.txt` |
-| `/resetprompt` | Revert to the default `prompt.txt` |
 | `/prompt` | Show the active prompt for this chat |
 
-Each scheduled or manually-triggered run: fetches new entries from every RSS feed registered for a chat, picks the oldest unsent article, rewrites it with Gemini, and sends it to that chat.
+The commands below change shared chat configuration, so in group/supergroup chats they're restricted to chat admins (anyone can use them in a private chat):
+
+| Command | Description |
+|---|---|
+| `/settopic` | Pin news delivery to the current forum topic (must be run inside that topic) |
+| `/addrss <url1>, <url2>` | Add one or more RSS feeds for this chat |
+| `/removerss <url1>, <url2>` | Remove one or more RSS feeds from this chat |
+| `/setprompt <text>` | Use a custom prompt for this chat instead of `prompt.txt` |
+| `/resetprompt` | Revert to the default `prompt.txt` |
+| `/stop` | Deactivate this chat's subscription (RSS feeds and custom prompt are kept; `/start` picks up where this left off) |
+
+Each scheduled or manually-triggered run: fetches new entries from every RSS feed registered for a chat, picks the newest unsent article, rewrites it with Gemini, and sends it to that chat.
 
 ## Custom Prompts
 
@@ -115,11 +122,11 @@ The default prompt lives in [prompt.txt](prompt.txt). It's a template rendered w
 - `{summary}` — article summary/excerpt
 - `{url}` — link to the original article
 
-A chat can override this with its own prompt via `/setprompt` (must also use the same placeholders); `/resetprompt` reverts it to `prompt.txt`.
+A chat can override this with its own prompt via `/setprompt`, which must not use any placeholder besides these three (validated at save time, so a typo can't silently break future news runs); `/resetprompt` reverts it to `prompt.txt`.
 
 ## Adding RSS Sources
 
-RSS feeds are managed per chat with `/addrss` and `/listfeeds` (stored in MongoDB). [rss_feed_links.txt](rss_feed_links.txt) is a plain reference list, not read by the app at runtime.
+RSS feeds are managed per chat with `/addrss`, `/removerss`, and `/listfeeds` (stored in MongoDB). [rss_feed_links.txt](rss_feed_links.txt) is a plain reference list, not read by the app at runtime.
 
 ## Changelog
 

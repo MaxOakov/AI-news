@@ -64,10 +64,12 @@ async def main():
     application.add_handler(CommandHandler('news', bot_commands.run_job_now))
     application.add_handler(CommandHandler('settopic', bot_commands.set_topic_id))
     application.add_handler(CommandHandler('addrss', bot_commands.add_rss_link))
+    application.add_handler(CommandHandler('removerss', bot_commands.remove_rss_link))
     application.add_handler(CommandHandler('listfeeds', bot_commands.list_rss_links))
     application.add_handler(CommandHandler('setprompt', bot_commands.set_prompt))
     application.add_handler(CommandHandler('resetprompt', bot_commands.reset_prompt))
     application.add_handler(CommandHandler('prompt', bot_commands.show_prompt))
+    application.add_handler(CommandHandler('stop', bot_commands.stop))
     application.add_handler(CommandHandler('help', bot_commands.show_help))
 
     async def run_scheduler_background():

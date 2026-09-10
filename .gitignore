@@ -1,6 +1,8 @@
 .env
 .venv/
 __pycache__/
+.pytest_cache/
+.coverage
 test_features.py
 rss_feed_links.txt
 prompt.txt

@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: ai-news-app
+    env_file:
+      - .env
+    volumes:
+      - .:/ai-news

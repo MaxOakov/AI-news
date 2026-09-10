@@ -4,7 +4,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from app.telegram_bot import telegram_bot
 from app.config import TELEGRAM_TOKEN
-from app.scheduler import start_scheduler, trigger_job_now
+from app.scheduler import scheduler_service
 from app.db import rss_link_repository, prompt_repository
 
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +30,7 @@ async def run_job_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat is None:
         return
 
-    started = await trigger_job_now()
+    started = await scheduler_service.trigger_now()
     if started:
         text = "✅ Новий запуск новин розпочато вручну."
     else:
@@ -196,7 +196,7 @@ async def main():
     async def run_scheduler_background():
         """Run scheduler in background without blocking."""
         try:
-            await start_scheduler()
+            await scheduler_service.start()
         except asyncio.CancelledError:
             print("⏹ Планувальник зупинено.")
         except Exception as e:

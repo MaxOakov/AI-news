@@ -113,7 +113,3 @@ class ArticleRepository:
         else:
             print(f"Не вдалося позначити статтю з id {article_id} як відправлену.")
 
-    def get_latest_published_at(self):
-        """Отримує час публікації найновішої статті в базі даних."""
-        latest = self._db.articles.find_one(sort=[("published", -1)])
-        return latest["published"] if latest else None

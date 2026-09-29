@@ -19,13 +19,6 @@ def test_get_for_chat_filters_by_chat_and_active(rss_link_repository):
     assert [link["url"] for link in links] == ["https://a"]
 
 
-def test_get_all_returns_every_active_link(rss_link_repository):
-    rss_link_repository.save("1", "https://a")
-    rss_link_repository.save("2", "https://b")
-    links = rss_link_repository.get_all()
-    assert {link["url"] for link in links} == {"https://a", "https://b"}
-
-
 def test_remove_deletes_matching_link(rss_link_repository):
     rss_link_repository.save("1", "https://a")
     rss_link_repository.remove("1", "https://a")

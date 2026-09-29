@@ -77,8 +77,6 @@ app/
 
    ```bash
    python main.py
-   # or
-   python run.py
    ```
 
 ### Running with Docker

@@ -42,9 +42,6 @@ class PromptRepository:
         prompt_path = _PROJECT_ROOT / "prompt.txt"
         if prompt_path.exists():
             return prompt_path.read_text(encoding="utf-8")
-        legacy_path = _PROJECT_ROOT / "prompt_anikoe.txt"
-        if legacy_path.exists():
-            return legacy_path.read_text(encoding="utf-8")
         return "Rewrite the following news in a friendly gaming-news tone. {title}\n{summary}\n{url}"
 
     @retry(

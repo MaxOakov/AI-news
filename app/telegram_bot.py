@@ -119,18 +119,3 @@ class TelegramBot:
 
         print(f"📨 Повідомлення надіслано в чат {chat_id} (topic: {message_thread_id})")
         return True
-
-    async def send_to_all_chats(self, text: str, parse_mode: str = "HTML") -> dict:
-        """Broadcast message to all active chats, using topic id when available."""
-        async with self._chats_lock:
-            chat_items = list(self.chats.items())
-
-        results = {}
-        for chat_id, chat in chat_items:
-            results[chat_id] = await self.send_message(
-                chat_id,
-                text,
-                parse_mode,
-                message_thread_id=chat.message_thread_id,
-            )
-        return results

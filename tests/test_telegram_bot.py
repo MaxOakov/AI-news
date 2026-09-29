@@ -159,18 +159,3 @@ async def test_send_message_exhausted_returns_false(telegram_bot, fake_tg_bot):
     ok = await telegram_bot.send_message("1", "hi")
     assert ok is False
     assert fake_tg_bot.sent == []
-
-
-# --------------------------------------------------------------------------
-# send_to_all_chats
-# --------------------------------------------------------------------------
-async def test_send_to_all_chats_uses_each_chats_topic_id(telegram_bot, fake_tg_bot):
-    await telegram_bot.register_chat_db("1", "A", message_thread_id=10)
-    await telegram_bot.register_chat_db("2", "B", message_thread_id=None)
-
-    results = await telegram_bot.send_to_all_chats("broadcast")
-
-    assert results == {"1": True, "2": True}
-    sent_by_chat = {m["chat_id"]: m for m in fake_tg_bot.sent}
-    assert sent_by_chat["1"]["message_thread_id"] == 10
-    assert "message_thread_id" not in sent_by_chat["2"]

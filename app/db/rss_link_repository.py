@@ -38,10 +38,6 @@ class RssLinkRepository:
         """Return all active RSS links for a particular chat."""
         return list(self._db.rss_links.find({"chat_id": str(chat_id), "is_active": True}))
 
-    def get_all(self):
-        """Return all active RSS links across every chat."""
-        return list(self._db.rss_links.find({"is_active": True}))
-
     @retry(
         max_retries=3,
         delay=1,

@@ -143,17 +143,3 @@ def test_mark_as_sent_sets_flag(article_repository, sample_article):
 
 def test_mark_as_sent_missing_id_does_not_raise(article_repository):
     article_repository.mark_as_sent("does-not-exist")  # just must not raise
-
-
-def test_get_latest_published_at_empty_returns_none(article_repository):
-    assert article_repository.get_latest_published_at() is None
-
-
-def test_get_latest_published_at_returns_max_published(article_repository, sample_article):
-    from dataclasses import replace
-    from datetime import datetime, timezone
-
-    older = replace(sample_article, published=datetime(2020, 1, 1, tzinfo=timezone.utc))
-    newer = replace(sample_article, published=datetime(2030, 1, 1, tzinfo=timezone.utc))
-    article_repository.create([older, newer])
-    assert article_repository.get_latest_published_at() == newer.published

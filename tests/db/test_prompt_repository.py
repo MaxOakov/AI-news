@@ -11,13 +11,6 @@ def test_get_default_text_reads_prompt_txt(prompt_repository, tmp_path, monkeypa
     assert prompt_repository.get_default_text() == "Hello {title}"
 
 
-def test_get_default_text_falls_back_to_legacy_file(prompt_repository, tmp_path, monkeypatch):
-    (tmp_path / "prompt_anikoe.txt").write_text("Legacy {title}", encoding="utf-8")
-    monkeypatch.setattr(prompt_repository_module, "_PROJECT_ROOT", tmp_path)
-
-    assert prompt_repository.get_default_text() == "Legacy {title}"
-
-
 def test_get_default_text_falls_back_to_hardcoded_default(prompt_repository, tmp_path, monkeypatch):
     monkeypatch.setattr(prompt_repository_module, "_PROJECT_ROOT", tmp_path)
 

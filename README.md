@@ -100,6 +100,7 @@ Add the bot to a Telegram chat/channel (as admin, if it's a channel) and registe
 | `/runjob`, `/news` | Trigger a news run immediately, for this chat only |
 | `/listfeeds` | List RSS feeds registered for this chat |
 | `/prompt` | Show the active prompt for this chat |
+| `/gemini_version` | Show the current Gemini model with buttons to switch it. The model is global (all chats); pressing a button is admin-only in groups, applies immediately and is saved to `.env` |
 
 The commands below change shared chat configuration, so in group/supergroup chats they're restricted to chat admins (anyone can use them in a private chat):
 

@@ -60,9 +60,26 @@ class FakeMessage:
         self.message_thread_id = message_thread_id
         self.sender_chat = SimpleNamespace(id=sender_chat_id) if sender_chat_id is not None else None
         self.replies: list[str] = []
+        self.reply_markups: list = []
 
     async def reply_text(self, text, *args, **kwargs):
         self.replies.append(text)
+        self.reply_markups.append(kwargs.get("reply_markup"))
+
+
+class FakeCallbackQuery:
+    """Stand-in for telegram.CallbackQuery, recording answer/edit calls."""
+
+    def __init__(self, data):
+        self.data = data
+        self.answers: list[dict] = []
+        self.edits: list[str] = []
+
+    async def answer(self, text=None, show_alert=False, **kwargs):
+        self.answers.append({"text": text, "show_alert": show_alert})
+
+    async def edit_message_text(self, text, *args, **kwargs):
+        self.edits.append(text)
 
 
 def make_update(
@@ -75,12 +92,15 @@ def make_update(
     has_chat=True,
     has_message=True,
     sender_chat_id=None,
+    callback_data=None,
 ):
     """Build a duck-typed stand-in for telegram.Update.
 
     Covers what BotCommands actually reads: update.effective_chat.{id,title,type},
     update.effective_user.{id,first_name}, update.message.{message_thread_id,
-    sender_chat,reply_text}.
+    sender_chat,reply_text}, update.callback_query (only when callback_data
+    is given; a real callback Update has message=None, so pass
+    has_message=False alongside it).
     """
     effective_chat = (
         SimpleNamespace(id=chat_id, title=title, type=chat_type) if has_chat else None
@@ -93,10 +113,12 @@ def make_update(
         if has_message
         else None
     )
+    callback_query = FakeCallbackQuery(callback_data) if callback_data is not None else None
     return SimpleNamespace(
         effective_chat=effective_chat,
         effective_user=effective_user,
         message=message,
+        callback_query=callback_query,
     )
 
 

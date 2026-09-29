@@ -1,9 +1,9 @@
 import logging
 import asyncio
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler
 
-from app.config import TELEGRAM_TOKEN, MONGODB_URL, GEMINI_MODEL
+from app.config import TELEGRAM_TOKEN, MONGODB_URL, GEMINI_MODEL, GEMINI_MODEL_OPTIONS, ENV_PATH
 from app.db.database import Database
 from app.db.article_repository import ArticleRepository
 from app.db.chat_repository import ChatRepository
@@ -11,10 +11,11 @@ from app.db.rss_link_repository import RssLinkRepository
 from app.db.prompt_repository import PromptRepository
 from app.services.rss_service import RssFeedService
 from app.services.news_generator import NewsGenerator
+from app.services.model_settings import GeminiModelSettings
 from app.telegram_bot import TelegramBot
 from app.news_pipeline import NewsPipeline
 from app.scheduler import SchedulerService
-from app.bot_commands import BotCommands
+from app.bot_commands import BotCommands, SET_MODEL_CALLBACK_PREFIX
 
 logging.basicConfig(level=logging.INFO)
 
@@ -35,13 +36,16 @@ def build_app():
 
     rss_feed_service = RssFeedService(article_repository, rss_link_repository)
     news_generator = NewsGenerator(GEMINI_MODEL, prompt_repository)
+    model_settings = GeminiModelSettings(news_generator, GEMINI_MODEL_OPTIONS, ENV_PATH)
 
     telegram_bot = TelegramBot(token=TELEGRAM_TOKEN, chat_repository=chat_repository)
 
     news_pipeline = NewsPipeline(rss_feed_service, news_generator, article_repository, telegram_bot)
     scheduler_service = SchedulerService(news_pipeline)
 
-    bot_commands = BotCommands(telegram_bot, scheduler_service, rss_link_repository, prompt_repository)
+    bot_commands = BotCommands(
+        telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings
+    )
 
     return telegram_bot, scheduler_service, bot_commands
 
@@ -71,6 +75,10 @@ async def main():
     application.add_handler(CommandHandler('prompt', bot_commands.show_prompt))
     application.add_handler(CommandHandler('stop', bot_commands.stop))
     application.add_handler(CommandHandler('help', bot_commands.show_help))
+    application.add_handler(CommandHandler('gemini_version', bot_commands.gemini_version))
+    application.add_handler(CallbackQueryHandler(
+        bot_commands.set_model_callback, pattern=f"^{SET_MODEL_CALLBACK_PREFIX}"
+    ))
 
     async def run_scheduler_background():
         """Run scheduler in background without blocking."""

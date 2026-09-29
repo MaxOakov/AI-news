@@ -10,9 +10,10 @@ All notable changes to this project will be documented in this file.
 - `set_model_callback()` handler to process model selection from inline buttons
 - Support for two Gemini models:
   - `gemini-2.5-flash`
-  - `gemini-3.1-flash-preview`
+  - `gemini-3.1-flash-lite-preview`
 - Automatic `.env` creation if it doesn't exist
-- Runtime model configuration updates in `os.environ` and `config.GEMINI_MODEL`
+- Runtime model configuration updates in `os.environ` and the live `NewsGenerator` (via `GeminiModelSettings`, wired in `build_app()`)
+- Model switching is admin-only in group chats (same `_require_admin` gate as other state-changing commands)
 
 ### Changed
 - `/gemini_version` command now displays interactive buttons instead of text instructions

@@ -19,6 +19,7 @@ from app.db.rss_link_repository import RssLinkRepository
 from app.models import Article, Chat
 from app.news_pipeline import NewsPipeline
 from app.scheduler import SchedulerService
+from app.services.model_settings import GeminiModelSettings
 from app.services.news_generator import NewsGenerator
 from app.services.rss_service import RssFeedService
 from app.telegram_bot import TelegramBot
@@ -185,5 +186,17 @@ def scheduler_service(news_pipeline):
 
 
 @pytest.fixture
-def bot_commands(telegram_bot, scheduler_service, rss_link_repository, prompt_repository):
-    return BotCommands(telegram_bot, scheduler_service, rss_link_repository, prompt_repository)
+def env_path(tmp_path):
+    return tmp_path / ".env"
+
+
+@pytest.fixture
+def model_settings(news_generator, env_path):
+    return GeminiModelSettings(news_generator, ["fake-model", "other-model"], env_path)
+
+
+@pytest.fixture
+def bot_commands(telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings):
+    return BotCommands(
+        telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings
+    )

@@ -1,14 +1,17 @@
 import asyncio
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from app.db.prompt_repository import InvalidPromptError, PromptRepository
 from app.db.rss_link_repository import RssLinkRepository
 from app.scheduler import SchedulerService
+from app.services.model_settings import GeminiModelSettings
 from app.telegram_bot import TelegramBot
 
 _ADMIN_STATUSES = {"creator", "administrator"}
+
+SET_MODEL_CALLBACK_PREFIX = "set_model:"
 
 
 class BotCommands:
@@ -30,11 +33,13 @@ class BotCommands:
         scheduler_service: SchedulerService,
         rss_link_repository: RssLinkRepository,
         prompt_repository: PromptRepository,
+        model_settings: GeminiModelSettings,
     ):
         self._telegram_bot = telegram_bot
         self._scheduler_service = scheduler_service
         self._rss_links = rss_link_repository
         self._prompts = prompt_repository
+        self._model_settings = model_settings
 
     async def _require_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Return True if the sender may run a state-changing command here.
@@ -277,6 +282,55 @@ class BotCommands:
         else:
             await update.message.reply_text("❌ Не вдалося відписати чат.")
 
+    async def gemini_version(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show the current Gemini model with inline buttons to switch it."""
+        if update.message is None:
+            return
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(option, callback_data=f"{SET_MODEL_CALLBACK_PREFIX}{option}")]
+            for option in self._model_settings.options
+        ])
+        await update.message.reply_text(
+            f"🤖 Поточна модель Gemini: {self._model_settings.current}\n"
+            "Оберіть модель (змінюється для всіх чатів і зберігається в .env):",
+            reply_markup=keyboard,
+        )
+
+    async def set_model_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle a model-selection button press from /gemini_version.
+
+        The model is global (shared by every chat), so the switch is
+        admin-gated like the other state-changing commands.
+        """
+        query = update.callback_query
+        if query is None:
+            return
+
+        if not await self._require_admin(update, context):
+            await query.answer("⛔ Змінювати модель можуть лише адміністратори чату.", show_alert=True)
+            return
+        await query.answer()
+
+        data = query.data or ""
+        if not data.startswith(SET_MODEL_CALLBACK_PREFIX):
+            await query.edit_message_text("❌ Невірна команда вибору моделі.")
+            return
+
+        model = data.removeprefix(SET_MODEL_CALLBACK_PREFIX)
+        if model not in self._model_settings.options:
+            await query.edit_message_text("⚠️ Оберіть, будь ласка, одну з доступних моделей.")
+            return
+
+        try:
+            await asyncio.to_thread(self._model_settings.set_model, model)
+        except OSError as e:
+            print(f"❌ Не вдалося оновити .env: {e}")
+            await query.edit_message_text("❌ Не вдалося оновити файл .env. Спробуйте пізніше.")
+            return
+
+        await query.edit_message_text(f"✅ Модель оновлено на {model}. Файл .env перезаписано.")
+
     async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show the available bot commands and their descriptions."""
         if update.message is None:
@@ -290,6 +344,7 @@ class BotCommands:
             "/news — те саме, що /runjob\n"
             "/listfeeds — показати RSS-лінки цього чату\n"
             "/prompt — показати активний prompt цього чату\n"
+            "/gemini_version — показати поточну модель Gemini (змінити можуть лише адміністратори)\n"
             "\nКоманди нижче доступні лише адміністраторам чату (у групах):\n"
             "/settopic — встановити поточну тему форуму для надсилання новин\n"
             "/addrss <url1>, <url2> — додати один або кілька RSS-лінків для цього чату\n"

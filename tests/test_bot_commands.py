@@ -188,7 +188,7 @@ async def test_show_help_lists_all_commands(bot_commands):
     text = update.message.replies[0]
     for command in [
         "/start", "/help", "/runjob", "/news", "/settopic", "/addrss", "/removerss",
-        "/listfeeds", "/setprompt", "/resetprompt", "/prompt", "/stop",
+        "/listfeeds", "/setprompt", "/resetprompt", "/prompt", "/stop", "/gemini_version",
     ]:
         assert command in text
 
@@ -425,3 +425,88 @@ async def test_add_rss_link_partial_failure_reports_both(bot_commands, rss_link_
     assert "Збережено" in update.message.replies[0]
     assert "Не вдалося зберегти" in update.message.replies[1]
     assert "https://bad" in update.message.replies[1]
+
+
+# --------------------------------------------------------------------------
+# /gemini_version and the set_model inline-button callback
+# --------------------------------------------------------------------------
+async def test_gemini_version_no_message_is_noop(bot_commands):
+    await bot_commands.gemini_version(make_update(has_message=False), make_context())  # must not raise
+
+
+async def test_gemini_version_shows_current_model_and_a_button_per_option(bot_commands):
+    update = make_update()
+    await bot_commands.gemini_version(update, make_context())
+
+    assert "fake-model" in update.message.replies[0]
+    keyboard = update.message.reply_markups[0].inline_keyboard
+    assert [row[0].callback_data for row in keyboard] == ["set_model:fake-model", "set_model:other-model"]
+
+
+async def test_set_model_callback_no_callback_query_is_noop(bot_commands):
+    await bot_commands.set_model_callback(make_update(), make_context())  # must not raise
+
+
+async def test_set_model_callback_switches_model(bot_commands, news_generator, env_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    update = make_update(has_message=False, callback_data="set_model:other-model")
+
+    await bot_commands.set_model_callback(update, make_context())
+
+    assert news_generator.model == "other-model"
+    assert "GEMINI_MODEL=other-model" in env_path.read_text(encoding="utf-8")
+    assert update.callback_query.answers == [{"text": None, "show_alert": False}]
+    assert "other-model" in update.callback_query.edits[0]
+
+
+async def test_set_model_callback_rejects_unknown_model(bot_commands, news_generator, env_path):
+    update = make_update(has_message=False, callback_data="set_model:evil-model")
+
+    await bot_commands.set_model_callback(update, make_context())
+
+    assert news_generator.model == "fake-model"
+    assert not env_path.exists()
+    assert "доступних моделей" in update.callback_query.edits[0]
+
+
+async def test_set_model_callback_rejects_malformed_data(bot_commands, news_generator):
+    update = make_update(has_message=False, callback_data="something_else")
+
+    await bot_commands.set_model_callback(update, make_context())
+
+    assert news_generator.model == "fake-model"
+    assert "Невірна команда" in update.callback_query.edits[0]
+
+
+async def test_set_model_callback_reports_env_write_failure(bot_commands, news_generator, model_settings, monkeypatch):
+    def boom(model):
+        raise OSError("read-only fs")
+
+    monkeypatch.setattr(model_settings, "set_model", boom)
+    update = make_update(has_message=False, callback_data="set_model:other-model")
+
+    await bot_commands.set_model_callback(update, make_context())
+
+    assert news_generator.model == "fake-model"
+    assert "Не вдалося оновити" in update.callback_query.edits[0]
+
+
+async def test_set_model_callback_blocked_for_non_admin_in_group(bot_commands, news_generator, env_path, fake_tg_bot):
+    update = make_update(chat_type="supergroup", user_id=7, has_message=False, callback_data="set_model:other-model")
+
+    await bot_commands.set_model_callback(update, make_context(bot=fake_tg_bot))
+
+    assert news_generator.model == "fake-model"
+    assert not env_path.exists()
+    assert update.callback_query.answers[0]["show_alert"] is True
+    assert update.callback_query.edits == []
+
+
+async def test_set_model_callback_allowed_for_group_admin(bot_commands, news_generator, fake_tg_bot, monkeypatch):
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    fake_tg_bot.make_admin(7)
+    update = make_update(chat_type="supergroup", user_id=7, has_message=False, callback_data="set_model:other-model")
+
+    await bot_commands.set_model_callback(update, make_context(bot=fake_tg_bot))
+
+    assert news_generator.model == "other-model"

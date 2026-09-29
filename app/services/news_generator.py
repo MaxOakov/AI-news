@@ -29,6 +29,15 @@ class NewsGenerator:
         self._client = client or genai.Client()
         print("Клієнт Gemini ініціалізовано.")
 
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @model.setter
+    def model(self, value: str) -> None:
+        # Read on every generation call, so a change applies to the next one.
+        self._model = value
+
     @retry_async(
         max_retries=3,
         delay=2,

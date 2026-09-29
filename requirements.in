@@ -1,0 +1,9 @@
+# Прямі залежності застосунку. requirements.txt генерується з цього файлу:
+#   pip-compile --strip-extras --no-emit-index-url requirements.in
+feedparser
+google-genai
+pymongo
+python-dotenv
+python-telegram-bot
+schedule
+tzdata==2026.1  # база таймзон для zoneinfo (Europe/Kyiv); на Windows системної немає

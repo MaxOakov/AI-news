@@ -1,0 +1,12 @@
+# Allowlist: у контекст збірки потрапляє лише те, що копіює Dockerfile.
+# Усе інше (.env з токенами, .venv, .git, тести, кеші) відсікається.
+# Якщо Dockerfile почне копіювати новий файл — додайте його сюди через "!".
+*
+
+!app/
+!main.py
+!prompt.txt
+!requirements.txt
+
+**/__pycache__
+**/*.pyc

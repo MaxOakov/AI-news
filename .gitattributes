@@ -1,0 +1,2 @@
+# Shell-скрипти мають бути з LF, інакше bash падає на "\r" (core.autocrlf=true на Windows)
+*.sh text eol=lf

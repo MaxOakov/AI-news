@@ -83,6 +83,11 @@ class NewsPipeline:
 
         print(f"✍️ Вибрана стаття для чату {chat_id}: '{selected_article.title}'")
         news_text = await self._news_generator.generate(selected_article, chat_id=chat_id)
+        if news_text is None:
+            print(f"❌ Не вдалося згенерувати текст для чату {chat_id}")
+            await asyncio.to_thread(self._articles.record_failure, selected_article)
+            return
+
         sent = await self._telegram_bot.send_message(
             chat_id,
             news_text,
@@ -94,3 +99,4 @@ class NewsPipeline:
             print(f"📊 Відправлено в чат {chat_id}")
         else:
             print(f"❌ Не вдалося відправити статтю в чат {chat_id}")
+            await asyncio.to_thread(self._articles.record_failure, selected_article)

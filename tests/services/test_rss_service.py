@@ -1,6 +1,10 @@
 from types import SimpleNamespace
 
+import httpx
+import pytest
+
 import app.services.rss_service as rss_service_module
+from app.services.rss_service import FeedFetchError, RssFeedService
 
 
 def _fake_feed(entries, bozo=False, bozo_exception=None):
@@ -284,3 +288,92 @@ def test_bozo_with_usable_entries_is_not_treated_as_a_failure(
     )
     rss_feed_service.fetch_new_articles("1", ["https://quirky-feed"])
     assert article_repository.exists("Still Works", "1") is True
+
+
+# --------------------------------------------------------------------------
+# Downloading: feeds are fetched over HTTP with a bounded time and size
+# (feedparser's own fetching has no timeout and could hang a run forever).
+# --------------------------------------------------------------------------
+def _client(handler):
+    return rss_service_module.make_http_client(transport=httpx.MockTransport(handler))
+
+
+def test_service_parses_the_downloaded_body(article_repository, rss_link_repository, monkeypatch):
+    parsed = []
+    service = RssFeedService(
+        article_repository, rss_link_repository, download=lambda url: b"<rss>body of " + url.encode()
+    )
+    monkeypatch.setattr(
+        rss_service_module.feedparser, "parse", lambda content: parsed.append(content) or _fake_feed([])
+    )
+
+    service.fetch_new_articles("1", ["https://feed"])
+
+    assert parsed == [b"<rss>body of https://feed"]
+
+
+def test_service_retries_download_failures(article_repository, rss_link_repository, monkeypatch):
+    calls = []
+
+    def download(url):
+        calls.append(url)
+        raise httpx.ConnectTimeout("timed out")
+
+    service = RssFeedService(article_repository, rss_link_repository, download=download)
+    monkeypatch.setattr(rss_service_module.feedparser, "parse", lambda content: _fake_feed([]))
+
+    service.fetch_new_articles("1", ["https://hanging-feed"])  # must not raise
+
+    assert calls == ["https://hanging-feed"] * 3
+
+
+def test_default_download_uses_a_timeout(article_repository, rss_link_repository):
+    service = RssFeedService(article_repository, rss_link_repository)
+    client = service._download.keywords["client"]
+    assert client.timeout.read == rss_service_module._FETCH_TIMEOUT_SECONDS
+    assert client.timeout.connect == rss_service_module._FETCH_TIMEOUT_SECONDS
+
+
+def test_download_feed_returns_body_and_sends_user_agent():
+    seen = {}
+
+    def handler(request):
+        seen["ua"] = request.headers["user-agent"]
+        return httpx.Response(200, content=b"<rss/>")
+
+    assert rss_service_module.download_feed("https://feed", _client(handler)) == b"<rss/>"
+    assert "AI-news-bot" in seen["ua"]
+
+
+def test_download_feed_follows_redirects():
+    def handler(request):
+        if request.url.path == "/old":
+            return httpx.Response(301, headers={"Location": "https://feed/new"})
+        return httpx.Response(200, content=b"<rss/>")
+
+    assert rss_service_module.download_feed("https://feed/old", _client(handler)) == b"<rss/>"
+
+
+def test_download_feed_raises_on_http_error():
+    client = _client(lambda request: httpx.Response(404))
+    with pytest.raises(httpx.HTTPStatusError):
+        rss_service_module.download_feed("https://feed", client)
+
+
+def test_download_feed_rejects_oversized_body(monkeypatch):
+    monkeypatch.setattr(rss_service_module, "_MAX_FEED_BYTES", 10)
+    client = _client(lambda request: httpx.Response(200, content=iter([b"x" * 6, b"x" * 6])))
+
+    with pytest.raises(FeedFetchError, match="більший"):
+        rss_service_module.download_feed("https://feed", client)
+
+
+def test_download_feed_gives_up_past_the_total_deadline(monkeypatch):
+    # A server trickling bytes never trips the per-read timeout, so the
+    # total deadline has to stop it. Each monotonic() call advances 10s.
+    clock = iter(range(0, 1000, 10))
+    monkeypatch.setattr(rss_service_module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    client = _client(lambda request: httpx.Response(200, content=iter([b"a", b"b", b"c"])))
+
+    with pytest.raises(FeedFetchError, match="довше"):
+        rss_service_module.download_feed("https://feed", client)

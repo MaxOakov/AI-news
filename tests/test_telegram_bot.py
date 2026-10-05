@@ -159,3 +159,44 @@ async def test_send_message_exhausted_returns_false(telegram_bot, fake_tg_bot):
     ok = await telegram_bot.send_message("1", "hi")
     assert ok is False
     assert fake_tg_bot.sent == []
+
+
+async def test_send_message_html_parse_error_resends_as_plain_text(telegram_bot, fake_tg_bot):
+    from telegram.error import BadRequest
+
+    # Every HTML attempt fails (the retry decorator makes 3); the
+    # plain-text resend after that succeeds.
+    fake_tg_bot.fail_times(3, BadRequest("Can't parse entities: unsupported start tag"))
+
+    ok = await telegram_bot.send_message(
+        "1", "<b>Hi</b> &amp; <p>see <a href='https://x/a'>this</a></p>"
+    )
+
+    assert ok is True
+    assert fake_tg_bot.sent == [
+        {"chat_id": "1", "text": "Hi & see this (https://x/a)", "parse_mode": None}
+    ]
+
+
+async def test_send_message_plain_text_resend_failing_returns_false(telegram_bot, fake_tg_bot):
+    from telegram.error import BadRequest
+
+    fake_tg_bot.fail_times(99, BadRequest("Can't parse entities: unsupported start tag"))
+
+    ok = await telegram_bot.send_message("1", "<b>Hi</b>")
+
+    assert ok is False
+    assert fake_tg_bot._attempts == 6  # 3 HTML attempts + 3 plain-text attempts
+    assert fake_tg_bot.sent == []
+
+
+async def test_send_message_other_bad_request_does_not_fall_back(telegram_bot, fake_tg_bot):
+    from telegram.error import BadRequest
+
+    fake_tg_bot.fail_times(3, BadRequest("Chat not found"))
+
+    ok = await telegram_bot.send_message("1", "<b>Hi</b>")
+
+    assert ok is False
+    assert fake_tg_bot._attempts == 3  # no extra plain-text attempt
+    assert fake_tg_bot.sent == []

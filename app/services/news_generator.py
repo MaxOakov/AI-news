@@ -55,10 +55,13 @@ class NewsGenerator:
             raise EmptyGenerationError("Gemini повернув порожню відповідь.")
         return response.candidates[0].content.parts[0].text.strip()
 
-    async def generate(self, article: Article, chat_id=None) -> str:
+    async def generate(self, article: Article, chat_id=None) -> str | None:
         """
         Генерує текст новини через GEMINI API з retry механізмом.
         Якщо для чату є custom prompt, він має пріоритет над prompt.txt.
+
+        Returns None once every retry has failed, so the caller doesn't
+        post an error message to the chat in place of the news.
         """
         prompt_template = await asyncio.to_thread(
             self._prompts.get_for_chat,
@@ -73,7 +76,7 @@ class NewsGenerator:
 
         text = await self._generate_content(prompt)
         if text is None:
-            return "⚠️ Gemini не повернув текст."
+            return None
 
         print(f"Статтю '{article.title}' переписано")
         return text

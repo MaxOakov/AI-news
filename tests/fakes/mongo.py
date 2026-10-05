@@ -2,11 +2,11 @@
 repositories without a real MongoDB connection.
 
 One generic FakeCollection implements every operation the repositories
-actually issue (plain equality filters, the one `$or`/`$exists` query used
-by ArticleRepository.get_next_unsent, `$set`/`$setOnInsert` updates with
-`upsert=True`, and `sort=[(field, direction)]`) rather than four near-
-identical subclasses, since the real collections differ only in which
-documents they hold, not in behavior.
+actually issue (plain equality filters, the `$or`/`$exists`/`$gte` query
+used by ArticleRepository.get_next_unsent, `$set`/`$setOnInsert` updates
+with `upsert=True`, `sort=[(field, direction)]`, and `create_index`) rather
+than four near-identical subclasses, since the real collections differ only
+in which documents they hold, not in behavior.
 """
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -22,6 +22,11 @@ def _matches(doc: dict, query: dict) -> bool:
             if (key in doc) != value["$exists"]:
                 return False
             continue
+        if isinstance(value, dict) and "$gte" in value:
+            # Like MongoDB, a missing/null field never satisfies a range query.
+            if doc.get(key) is None or doc[key] < value["$gte"]:
+                return False
+            continue
         if doc.get(key) != value:
             return False
     return True
@@ -32,7 +37,14 @@ class FakeCollection:
 
     def __init__(self):
         self.docs: list[dict] = []
+        self.indexes: list[list[tuple]] = []
         self._next_id = 1
+
+    def create_index(self, keys, **kwargs):
+        """Record the index; like MongoDB, creating an existing one is a no-op."""
+        if keys not in self.indexes:
+            self.indexes.append(keys)
+        return "_".join(f"{field}_{direction}" for field, direction in keys)
 
     def _fresh_id(self) -> str:
         fake_id = f"fake-id-{self._next_id}"

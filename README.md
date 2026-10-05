@@ -70,6 +70,7 @@ app/
    | `GEMINI_MODEL` | No | Gemini model name (defaults to `gemini-3.1-flash-lite-preview`) |
    | `TELEGRAM_TOKEN` | Yes | Bot token from BotFather |
    | `MONGODB_URL` | Yes | MongoDB connection string (database name used: `news`) |
+   | `MAX_ARTICLE_AGE_HOURS` | No | Unsent articles published longer ago than this are never posted (defaults to `12`) |
 
 3. **(Optional) customize the default prompt**
 
@@ -113,7 +114,7 @@ The commands below change shared chat configuration, so in group/supergroup chat
 | `/resetprompt` | Revert to the default `prompt.txt` |
 | `/stop` | Deactivate this chat's subscription (RSS feeds and custom prompt are kept; `/start` picks up where this left off) |
 
-Each scheduled or manually-triggered run: fetches new entries from every RSS feed registered for a chat (up to the few most recent per feed per poll), picks the *oldest* unsent article so a backlog works down in order instead of newer items perpetually jumping the queue, rewrites it with Gemini, and sends it to that chat.
+Each scheduled or manually-triggered run: fetches new entries from every RSS feed registered for a chat (up to the few most recent per feed per poll), picks the *newest* unsent article so the channel always posts the freshest news, rewrites it with Gemini, and sends it to that chat. Older unsent articles wait their turn, and once they're older than `MAX_ARTICLE_AGE_HOURS` they're left unposted, so stale news never surfaces later; and an article that fails to generate or send on 3 runs is skipped so it can't block the queue.
 
 ## Custom Prompts
 

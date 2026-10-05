@@ -1,9 +1,12 @@
 import logging
 import asyncio
+from datetime import timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler
 
-from app.config import TELEGRAM_TOKEN, MONGODB_URL, GEMINI_MODEL, GEMINI_MODEL_OPTIONS, ENV_PATH
+from app.config import (
+    TELEGRAM_TOKEN, MONGODB_URL, GEMINI_MODEL, GEMINI_MODEL_OPTIONS, ENV_PATH, MAX_ARTICLE_AGE_HOURS,
+)
 from app.db.database import Database
 from app.db.article_repository import ArticleRepository
 from app.db.chat_repository import ChatRepository
@@ -29,7 +32,7 @@ def build_app():
     together, in dependency order.
     """
     database = Database(MONGODB_URL)
-    article_repository = ArticleRepository(database)
+    article_repository = ArticleRepository(database, max_article_age=timedelta(hours=MAX_ARTICLE_AGE_HOURS))
     chat_repository = ChatRepository(database)
     rss_link_repository = RssLinkRepository(database)
     prompt_repository = PromptRepository(database)
@@ -47,7 +50,7 @@ def build_app():
         telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings
     )
 
-    return telegram_bot, scheduler_service, bot_commands
+    return telegram_bot, scheduler_service, bot_commands, article_repository
 
 
 async def main():
@@ -55,7 +58,14 @@ async def main():
     if not TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_TOKEN is not configured.")
 
-    telegram_bot, scheduler_service, bot_commands = build_app()
+    telegram_bot, scheduler_service, bot_commands, article_repository = build_app()
+
+    # Created once at startup. A failure here shouldn't stop the bot: every
+    # query still works without the indexes, just more slowly.
+    try:
+        await asyncio.to_thread(article_repository.ensure_indexes)
+    except Exception as e:
+        print(f"⚠️ Не вдалося створити індекси: {e}")
 
     # Load chats from DB
     await telegram_bot.load_chats_from_db()

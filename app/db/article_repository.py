@@ -1,13 +1,43 @@
+from datetime import datetime, timedelta, timezone
+
+from pymongo import ASCENDING
+
 from app.db.database import Database
 from app.models import Article
 from app.retry import retry
 
+# How many runs may fail on one article (Gemini returned nothing, Telegram
+# rejected the message, ...) before it's skipped for good. get_next_unsent
+# returns the same newest unsent article until something newer arrives, so
+# without this cap one article that can never be sent would block its
+# chat's queue until a newer one turns up (or forever, on a quiet feed).
+MAX_SEND_ATTEMPTS = 3
+
 
 class ArticleRepository:
-    """Persistence for Article, backed by the `articles` collection."""
+    """Persistence for Article, backed by the `articles` collection.
 
-    def __init__(self, database: Database):
+    `max_article_age`, if set, limits get_next_unsent to articles published
+    within that window. Feeds can add articles faster than one per run gets
+    sent; with the newest posted first, the leftovers would otherwise sit in
+    the queue indefinitely and surface as stale news whenever the feeds go
+    quiet. Articles past the window simply stay in the database unposted.
+    """
+
+    def __init__(self, database: Database, max_article_age: timedelta | None = None):
         self._db = database
+        self._max_article_age = max_article_age
+
+    def ensure_indexes(self):
+        """Create the indexes the hot queries need (no-op if they already exist).
+
+        - (chat_id, guid): the per-entry duplicate check on every feed poll.
+        - (chat_id, published): get_next_unsent's filter on the age window
+          plus its sort, so it doesn't scan every article a chat ever had.
+        """
+        self._db.articles.create_index([("chat_id", ASCENDING), ("guid", ASCENDING)])
+        self._db.articles.create_index([("chat_id", ASCENDING), ("published", ASCENDING)])
+        print("✅ Індекси для статей створено.")
 
     @retry(
         max_retries=3,
@@ -39,23 +69,27 @@ class ArticleRepository:
         ),
     )
     def _find_unsent(self, query):
-        # Ascending: the OLDEST unsent article first, so a backlog that
-        # accumulates faster than it's sent (one per job run) works down in
-        # FIFO order instead of newer articles perpetually jumping the
-        # queue and starving older ones.
-        return self._db.articles.find_one(query, sort=[("published", 1)])
+        # Descending: the NEWEST unsent article first, so the channel always
+        # posts the freshest news. When feeds add articles faster than one
+        # per run gets sent, the older ones wait and eventually age out of
+        # the max_article_age window unposted, instead of the channel
+        # lagging behind the news working through the backlog in order.
+        return self._db.articles.find_one(query, sort=[("published", -1)])
 
     def get_next_unsent(self, chat_id=None) -> Article | None:
-        """Отримує найстарішу невідправлену статтю з бази даних з retry механізмом."""
+        """Отримує найновішу невідправлену статтю з бази даних з retry механізмом."""
         query = {
             "$or": [
                 {"is_sent": False},
                 {"is_sent": None},
                 {"is_sent": {"$exists": False}}
-            ]
+            ],
+            "skipped": {"$exists": False},
         }
         if chat_id is not None:
             query["chat_id"] = str(chat_id)
+        if self._max_article_age is not None:
+            query["published"] = {"$gte": datetime.now(timezone.utc) - self._max_article_age}
 
         try:
             doc = self._find_unsent(query)
@@ -112,4 +146,33 @@ class ArticleRepository:
             print(f"Стаття з id {article_id} позначена як відправлена.")
         else:
             print(f"Не вдалося позначити статтю з id {article_id} як відправлену.")
+
+    def record_failure(self, article: Article) -> bool:
+        """Count one failed generate/send attempt for `article`.
+
+        Once it reaches MAX_SEND_ATTEMPTS the article is flagged `skipped`,
+        which takes it out of get_next_unsent so the chat's queue moves on.
+        Returns True if the article was skipped by this call.
+
+        Writes the incremented count with $set rather than $inc: a chat is
+        never processed by two runs at once (SchedulerService's `_running`
+        guard), so the in-memory count is current.
+        """
+        article.fail_count += 1
+        update = {"fail_count": article.fail_count}
+        skipped = article.fail_count >= MAX_SEND_ATTEMPTS
+        if skipped:
+            update["skipped"] = True
+
+        try:
+            self._db.articles.update_one({"_id": article.id}, {"$set": update})
+        except Exception as exc:
+            print(f"⏹ Не вдалося записати невдалу спробу для статті '{article.title}': {exc}")
+            return False
+
+        if skipped:
+            print(f"⏭ Стаття '{article.title}' пропущена після {article.fail_count} невдалих спроб.")
+        else:
+            print(f"⚠️ Невдала спроба {article.fail_count}/{MAX_SEND_ATTEMPTS} для статті '{article.title}'.")
+        return skipped
 

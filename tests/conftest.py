@@ -172,7 +172,11 @@ def sample_chat_with_topic():
 # --------------------------------------------------------------------------
 @pytest.fixture
 def rss_feed_service(article_repository, rss_link_repository):
-    return RssFeedService(article_repository, rss_link_repository)
+    # Pass the URL straight through instead of downloading it (feedparser.parse
+    # accepts a URL as well as a body), so tests stub feedparser.parse keyed
+    # by URL and nothing ever goes out over HTTP. download_feed itself is
+    # tested separately against an httpx.MockTransport.
+    return RssFeedService(article_repository, rss_link_repository, download=lambda url: url)
 
 
 @pytest.fixture

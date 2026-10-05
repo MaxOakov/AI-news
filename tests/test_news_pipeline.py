@@ -4,6 +4,7 @@ import time
 from types import SimpleNamespace
 
 import app.services.rss_service as rss_service_module
+from app.db.article_repository import MAX_SEND_ATTEMPTS
 from app.news_pipeline import NewsPipeline
 
 
@@ -130,6 +131,74 @@ async def test_failed_send_leaves_article_unsent(
     await news_pipeline.run(chat_id="1")
 
     assert article_repository.get_next_unsent("1") is not None  # still unsent
+
+
+async def test_failed_generation_sends_nothing_and_records_failure(
+    news_pipeline, telegram_bot, rss_link_repository, article_repository,
+    fake_genai_client, fake_tg_bot, monkeypatch
+):
+    # Regression: an exhausted Gemini retry used to post a warning string
+    # to the chat in place of the news, and mark the article as sent.
+    await _register_chat_with_feed(telegram_bot, rss_link_repository, "1", "https://feed")
+    monkeypatch.setattr(
+        rss_service_module.feedparser, "parse", lambda url: _feed_with_one_entry("Article")
+    )
+    fake_genai_client.fail_times(99)
+
+    await news_pipeline.run(chat_id="1")
+
+    assert fake_tg_bot.sent == []
+    article = article_repository.get_next_unsent("1")
+    assert article is not None  # still queued for the next run
+    assert article.fail_count == 1
+
+
+async def test_failed_send_records_failure(
+    news_pipeline, telegram_bot, rss_link_repository, article_repository, fake_tg_bot, monkeypatch
+):
+    await _register_chat_with_feed(telegram_bot, rss_link_repository, "1", "https://feed")
+    monkeypatch.setattr(
+        rss_service_module.feedparser, "parse", lambda url: _feed_with_one_entry("Article")
+    )
+    fake_tg_bot.fail_times(99)
+
+    await news_pipeline.run(chat_id="1")
+
+    assert article_repository.get_next_unsent("1").fail_count == 1
+
+
+async def test_article_that_keeps_failing_no_longer_blocks_the_queue(
+    news_pipeline, news_generator, telegram_bot, rss_link_repository, fake_tg_bot, monkeypatch
+):
+    # Regression: the article at the head of the queue was retried on every
+    # run, so one that could never be sent starved the rest of its chat's
+    # queue. "Broken" is the newest, so it's the one picked first.
+    await _register_chat_with_feed(telegram_bot, rss_link_repository, "1", "https://feed")
+    entries = [
+        SimpleNamespace(
+            title=title, link=f"https://x/{title}", summary="sum",
+            published_parsed=(2026, 1, day, 0, 0, 0, 0, 0, 0),
+        )
+        for title, day in [("Broken", 2), ("Good", 1)]
+    ]
+    monkeypatch.setattr(
+        rss_service_module.feedparser, "parse", lambda url: SimpleNamespace(entries=entries)
+    )
+    real_generate = news_generator.generate
+
+    async def generate(article, chat_id=None):
+        if article.title == "Broken":
+            return None
+        return await real_generate(article, chat_id=chat_id)
+
+    monkeypatch.setattr(news_generator, "generate", generate)
+
+    for _ in range(MAX_SEND_ATTEMPTS):
+        await news_pipeline.run(chat_id="1")
+    assert fake_tg_bot.sent == []  # "Broken" was picked every time
+
+    await news_pipeline.run(chat_id="1")
+    assert len(fake_tg_bot.sent) == 1  # "Broken" is skipped, "Good" goes out
 
 
 async def test_message_thread_id_forwarded_to_send(

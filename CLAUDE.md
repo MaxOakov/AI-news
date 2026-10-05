@@ -14,7 +14,7 @@ pytest                                                    # full suite (pytest.i
 pytest tests/test_news_pipeline.py                        # one file
 pytest tests/test_news_pipeline.py::test_name             # one test
 pytest --cov=app --cov-report=term-missing                # what CI runs
-python main.py                                            # run the bot (needs .env: TELEGRAM_TOKEN, GEMINI_API_KEY, MONGODB_URL, optional GEMINI_MODEL)
+python main.py                                            # run the bot (needs .env: TELEGRAM_TOKEN, GEMINI_API_KEY, MONGODB_URL, optional GEMINI_MODEL, MAX_ARTICLE_AGE_HOURS)
 docker compose up --build
 ```
 
@@ -29,7 +29,7 @@ CI ([.github/workflows/tests.yml](.github/workflows/tests.yml)) only runs the te
 **Dependency injection via a single composition root.** [main.py](main.py) `build_app()` constructs the whole object graph explicitly; every class takes its collaborators through its constructor. There are no module-level singletons (the docstrings reference the old globals this replaced) — don't reintroduce them. New dependencies get wired in `build_app()`, and new commands are registered as `CommandHandler`s in `main()`.
 
 Flow of one run:
-`SchedulerService` → `NewsPipeline.run(chat_id=None|id)` → per chat: `RssFeedService.get_feeds_for_chat` → `fetch_new_articles` (stores new entries via `ArticleRepository`) → `ArticleRepository.get_next_unsent` (oldest first) → `NewsGenerator.generate` (resolves prompt via `PromptRepository`) → `TelegramBot.send_message` → `mark_as_sent` only if sending succeeded.
+`SchedulerService` → `NewsPipeline.run(chat_id=None|id)` → per chat: `RssFeedService.get_feeds_for_chat` → `fetch_new_articles` (stores new entries via `ArticleRepository`) → `ArticleRepository.get_next_unsent` (newest first, within `max_article_age`, excluding `skipped`) → `NewsGenerator.generate` (resolves prompt via `PromptRepository`; `None` on failure) → `TelegramBot.send_message` (falls back to plain text if Telegram rejects the HTML) → `mark_as_sent` if sending succeeded, else `record_failure` (marks the article `skipped` after `MAX_SEND_ATTEMPTS`). `ArticleRepository.ensure_indexes()` runs once at startup in `main()`.
 
 **Sync/async boundary.** Repositories and `RssFeedService` are synchronous (pymongo, feedparser). Async callers must wrap them in `asyncio.to_thread(...)`. Gemini (`client.aio`) and Telegram sending are natively async. `NewsPipeline` processes all chats concurrently with `asyncio.gather`, bounded by a semaphore (`max_concurrent_chats`).
 
@@ -45,13 +45,13 @@ Flow of one run:
 
 **Prompts.** Default prompt is `prompt.txt` at the project root (copied into the Docker image), rendered with `str.format(title=, summary=, url=)`. Per-chat custom prompts in `chat_prompts` override it and are validated at save time (`InvalidPromptError`) — any other `{placeholder}` or literal braces break formatting.
 
-**RSS dedup** is by entry GUID (`id` → `link` → title fallback); only `_MAX_ENTRIES_PER_POLL` newest entries per feed are checked each poll. `rss_feed_links.txt` is a reference list only, not read at runtime.
+**RSS dedup** is by entry GUID (`id` → `link` → title fallback); only `_MAX_ENTRIES_PER_POLL` newest entries per feed are checked each poll. Feeds are downloaded with httpx (`download_feed`: total-time and size limits, since feedparser's own fetching has no timeout) and the body is passed to `feedparser.parse`. `rss_feed_links.txt` is a reference list only, not read at runtime.
 
 ## Testing
 
 Tests never touch real MongoDB, Gemini, or Telegram. [tests/conftest.py](tests/conftest.py) builds the real app classes on top of fakes in [tests/fakes/](tests/fakes/):
 - `FakeCollection` — in-memory pymongo stand-in supporting only the query/update operators the repositories actually use (equality, `$or`, `$exists`, `$set`, `$setOnInsert`, upsert, sort). If a repository starts using a new Mongo operator, extend the fake.
 - `FakeGenAIClient` / `FakeTGBot` — with `fail_times(n)` etc. to exercise retry paths.
-- Injection points: `Database._db` is set directly to skip the lazy connect; `NewsGenerator(..., client=fake)`; `TelegramBot.bot = fake`.
+- Injection points: `Database._db` is set directly to skip the lazy connect; `NewsGenerator(..., client=fake)`; `TelegramBot.bot = fake`; `RssFeedService(..., download=lambda url: url)` in conftest, so tests stub `feedparser.parse` keyed by URL and never make HTTP calls (`download_feed` itself is tested via `make_http_client(transport=httpx.MockTransport(...))`).
 
 An autouse `no_sleep` fixture replaces the `time`/`asyncio` **names** inside `app.retry` and `app.scheduler` with proxies whose `sleep` is instant. It deliberately does not patch `time.sleep`/`asyncio.sleep` globally (that would break concurrency tests). If you add a new module that sleeps for retries/backoff, add it to that fixture the same way.

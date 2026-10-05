@@ -21,6 +21,7 @@ class Article:
     is_sent: bool = False
     chat_id: str | None = None
     guid: str | None = None  # feed entry's stable id (or link, as a fallback)
+    fail_count: int = 0  # failed generate/send attempts; see ArticleRepository.record_failure
     id: Any = None  # Mongo's `_id`; unset until the article is inserted.
 
     def to_dict(self) -> dict:
@@ -36,6 +37,8 @@ class Article:
             data["chat_id"] = self.chat_id
         if self.guid is not None:
             data["guid"] = self.guid
+        if self.fail_count:
+            data["fail_count"] = self.fail_count
         if self.id is not None:
             data["_id"] = self.id
         return data
@@ -51,5 +54,6 @@ class Article:
             is_sent=bool(doc.get("is_sent", False)),
             chat_id=doc.get("chat_id"),
             guid=doc.get("guid"),
+            fail_count=int(doc.get("fail_count") or 0),
             id=doc.get("_id"),
         )

@@ -1,8 +1,27 @@
 from telegram import Bot
+from telegram.error import BadRequest
 from app.db.chat_repository import ChatRepository
 from app.models import Chat
 from app.retry import retry_async
 import asyncio
+import html
+import re
+
+_LINK_RE = re.compile(r"""<a\s[^>]*href=["']([^"']*)["'][^>]*>(.*?)</a>""", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _html_to_plain_text(text: str) -> str:
+    """Strip HTML tags for a plain-text resend, keeping each link's URL
+    (`<a href='URL'>label</a>` becomes `label (URL)`) so it isn't lost."""
+    text = _LINK_RE.sub(lambda m: f"{m.group(2)} ({m.group(1)})", text)
+    return html.unescape(_TAG_RE.sub("", text))
+
+
+def _is_html_parse_error(exc: Exception) -> bool:
+    """Telegram rejected the message's HTML markup (e.g. a tag Gemini
+    produced that Telegram doesn't support, or one left unclosed)."""
+    return isinstance(exc, BadRequest) and "parse entities" in str(exc).lower()
 
 
 @retry_async(
@@ -114,8 +133,18 @@ class TelegramBot:
 
         try:
             await _send_once(self.bot, payload)
-        except Exception:
-            return False
+        except Exception as exc:
+            if not (payload["parse_mode"] and _is_html_parse_error(exc)):
+                return False
+            # Resending the same markup would fail the same way, so retry
+            # once as plain text instead of leaving the article unsent.
+            print(f"⚠️ Telegram не прийняв HTML, надсилаємо як звичайний текст: {exc}")
+            payload["text"] = _html_to_plain_text(text)
+            payload["parse_mode"] = None
+            try:
+                await _send_once(self.bot, payload)
+            except Exception:
+                return False
 
         print(f"📨 Повідомлення надіслано в чат {chat_id} (topic: {message_thread_id})")
         return True

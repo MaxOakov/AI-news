@@ -11,7 +11,7 @@ def test_build_app_returns_wired_object_graph(monkeypatch):
 
     import main
 
-    telegram_bot, scheduler_service, bot_commands = main.build_app()
+    telegram_bot, scheduler_service, bot_commands, article_repository = main.build_app()
 
     assert isinstance(telegram_bot, TelegramBot)
     assert isinstance(scheduler_service, SchedulerService)
@@ -21,6 +21,8 @@ def test_build_app_returns_wired_object_graph(monkeypatch):
     assert scheduler_service._pipeline._telegram_bot is telegram_bot
     assert bot_commands._telegram_bot is telegram_bot
     assert bot_commands._scheduler_service is scheduler_service
+    assert scheduler_service._pipeline._articles is article_repository
+    assert article_repository._max_article_age is not None  # queue age limit is wired in
 
 
 def test_build_app_does_not_connect_to_mongo_when_url_missing(monkeypatch):

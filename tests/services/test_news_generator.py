@@ -35,12 +35,14 @@ async def test_generate_retries_then_succeeds(news_generator, fake_genai_client,
     assert len(fake_genai_client.calls) == 2
 
 
-async def test_generate_exhausted_returns_fallback_text(news_generator, fake_genai_client, sample_article):
+async def test_generate_exhausted_returns_none(news_generator, fake_genai_client, sample_article):
+    # None, not a warning string: the pipeline would otherwise post the
+    # warning to the chat as if it were the news.
     fake_genai_client.fail_times(99)
 
     result = await news_generator.generate(sample_article, chat_id="1")
 
-    assert result == "⚠️ Gemini не повернув текст."
+    assert result is None
 
 
 async def test_generate_empty_candidates_then_success(news_generator, fake_genai_client, sample_article):

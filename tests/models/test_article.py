@@ -75,3 +75,17 @@ def test_from_dict_reads_guid():
 def test_from_dict_null_summary_defaults_to_empty_string():
     article = Article.from_dict({"title": "T", "url": "https://x", "summary": None})
     assert article.summary == ""
+
+
+def test_to_dict_omits_zero_fail_count():
+    assert "fail_count" not in Article(title="T", url="https://x").to_dict()
+
+
+def test_fail_count_round_trip():
+    article = Article(title="T", url="https://x", fail_count=2)
+    assert article.to_dict()["fail_count"] == 2
+    assert Article.from_dict(article.to_dict()).fail_count == 2
+
+
+def test_from_dict_missing_fail_count_defaults_to_zero():
+    assert Article.from_dict({"title": "T", "url": "https://x"}).fail_count == 0

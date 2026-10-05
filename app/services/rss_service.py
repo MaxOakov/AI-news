@@ -1,5 +1,10 @@
 import feedparser
 import datetime
+import functools
+import time
+from collections.abc import Callable
+
+import httpx
 
 from app.db.article_repository import ArticleRepository
 from app.db.rss_link_repository import RssLinkRepository
@@ -12,9 +17,49 @@ from app.retry import retry
 # doesn't silently lose everything past the single newest item.
 _MAX_ENTRIES_PER_POLL = 3
 
+# Limits for downloading one feed. feedparser's own fetching has no timeout,
+# so a server that accepts the connection and then never answers would hang
+# its worker thread, and with it the whole run, indefinitely.
+_FETCH_TIMEOUT_SECONDS = 15
+_MAX_FEED_BYTES = 5 * 1024 * 1024
+_USER_AGENT = "Mozilla/5.0 (compatible; AI-news-bot/1.0)"
+
 
 class FeedFetchError(Exception):
     """feedparser reported a parsing/fetch problem and returned nothing usable."""
+
+
+def make_http_client(transport: httpx.BaseTransport | None = None) -> httpx.Client:
+    """The HTTP client feeds are downloaded with (shared across chats so
+    connections to the same host get reused). `transport` is for tests."""
+    return httpx.Client(
+        timeout=_FETCH_TIMEOUT_SECONDS,
+        follow_redirects=True,
+        headers={"User-Agent": _USER_AGENT},
+        transport=transport,
+    )
+
+
+def download_feed(url: str, client: httpx.Client) -> bytes:
+    """Download a feed's raw body, bounded in total time and size.
+
+    The client's timeout bounds each network wait (connect, each read), not
+    the whole download, so a server trickling bytes slowly could otherwise
+    still hold the thread for a long time; the deadline here caps that.
+    """
+    deadline = time.monotonic() + _FETCH_TIMEOUT_SECONDS
+    chunks = []
+    size = 0
+    with client.stream("GET", url) as response:
+        response.raise_for_status()
+        for chunk in response.iter_bytes():
+            size += len(chunk)
+            if size > _MAX_FEED_BYTES:
+                raise FeedFetchError(f"фід більший за {_MAX_FEED_BYTES} байт")
+            if time.monotonic() > deadline:
+                raise FeedFetchError(f"завантаження довше за {_FETCH_TIMEOUT_SECONDS} с")
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _entry_guid(entry) -> str | None:
@@ -37,11 +82,20 @@ class RssFeedService:
     articles) and RssLinkRepository (to read which feeds a chat follows)
     through constructor injection, rather than importing the persistence
     layer's free functions directly.
+
+    `download` fetches a feed URL's raw body; it defaults to download_feed
+    with a fresh HTTP client. Its result is handed to feedparser.parse.
     """
 
-    def __init__(self, article_repository: ArticleRepository, rss_link_repository: RssLinkRepository):
+    def __init__(
+        self,
+        article_repository: ArticleRepository,
+        rss_link_repository: RssLinkRepository,
+        download: Callable[[str], bytes] | None = None,
+    ):
         self._articles = article_repository
         self._rss_links = rss_link_repository
+        self._download = download or functools.partial(download_feed, client=make_http_client())
 
     def get_feeds_for_chat(self, chat_id) -> list[str]:
         """Return all active RSS URLs for a specific chat."""
@@ -66,13 +120,14 @@ class RssFeedService:
     def _parse_and_store_feed(self, url, chat_id):
         """Parse a single RSS feed and store any of its newest entries that
         aren't already known."""
-        feed = feedparser.parse(url)
+        feed = feedparser.parse(self._download(url))
         if getattr(feed, "bozo", False) and not feed.entries:
             # bozo alone isn't fatal: many real feeds have minor XML quirks
             # feedparser still recovers entries from despite flagging them.
-            # bozo with zero entries means the fetch/parse genuinely failed
-            # (feed down, unreachable, not XML at all, ...), which
-            # feedparser reports by quietly returning an empty result
+            # bozo with zero entries means the parse genuinely failed (an
+            # HTML error page, not XML at all, ...; network failures already
+            # raised from the download), which feedparser reports by
+            # quietly returning an empty result
             # rather than raising. Surface it as an exception so the retry
             # decorator above actually retries and eventually logs, instead
             # of silently treating a broken feed as "nothing new this poll".

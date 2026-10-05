@@ -68,18 +68,27 @@ class FakeMessage:
 
 
 class FakeCallbackQuery:
-    """Stand-in for telegram.CallbackQuery, recording answer/edit calls."""
+    """Stand-in for telegram.CallbackQuery, recording answer/edit calls.
+
+    `message` is the message the pressed button belongs to; replies to it
+    land in `message.replies`.
+    """
 
     def __init__(self, data):
         self.data = data
         self.answers: list[dict] = []
         self.edits: list[str] = []
+        self.markup_edits: list = []
+        self.message = FakeMessage()
 
     async def answer(self, text=None, show_alert=False, **kwargs):
         self.answers.append({"text": text, "show_alert": show_alert})
 
     async def edit_message_text(self, text, *args, **kwargs):
         self.edits.append(text)
+
+    async def edit_message_reply_markup(self, reply_markup=None, **kwargs):
+        self.markup_edits.append(reply_markup)
 
 
 def make_update(

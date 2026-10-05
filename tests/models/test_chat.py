@@ -45,3 +45,16 @@ def test_round_trip_with_topic():
     original = Chat(chat_id="1", chat_name="Room", chat_type="group", message_thread_id=7)
     restored = Chat.from_dict(original.to_dict())
     assert restored == original
+
+
+def test_reviewer_is_read_but_never_written():
+    # Only ChatRepository.set_reviewer writes it, so re-registering a chat
+    # (e.g. /start) can't switch its moderation off.
+    chat = Chat.from_dict({"chat_id": "1", "reviewer_chat_id": 7})
+    assert chat.reviewer_chat_id == "7"
+    assert "reviewer_chat_id" not in chat.to_dict()
+
+
+def test_reviewer_defaults_to_none():
+    assert Chat.from_dict({"chat_id": "1"}).reviewer_chat_id is None
+    assert Chat.from_dict({"chat_id": "1", "reviewer_chat_id": None}).reviewer_chat_id is None

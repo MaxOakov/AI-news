@@ -1,4 +1,5 @@
 import asyncio
+import html
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -7,6 +8,7 @@ from app.db.prompt_repository import InvalidPromptError, PromptRepository
 from app.db.rss_link_repository import RssLinkRepository
 from app.scheduler import SchedulerService
 from app.services.model_settings import GeminiModelSettings
+from app.services.publisher import REVIEW_CALLBACK_PREFIX, ArticlePublisher, review_done_keyboard
 from app.telegram_bot import TelegramBot
 
 _ADMIN_STATUSES = {"creator", "administrator"}
@@ -22,7 +24,7 @@ class BotCommands:
     root), rather than reaching into module-level singletons.
 
     Commands that change shared chat configuration (topic id, RSS feeds,
-    custom prompt, subscription state) are restricted to chat admins in
+    custom prompt, subscription state, moderation) are restricted to chat admins in
     group/supergroup chats via `_require_admin`; read-only commands and
     /start are open to anyone.
     """
@@ -34,12 +36,14 @@ class BotCommands:
         rss_link_repository: RssLinkRepository,
         prompt_repository: PromptRepository,
         model_settings: GeminiModelSettings,
+        publisher: ArticlePublisher,
     ):
         self._telegram_bot = telegram_bot
         self._scheduler_service = scheduler_service
         self._rss_links = rss_link_repository
         self._prompts = prompt_repository
         self._model_settings = model_settings
+        self._publisher = publisher
 
     async def _require_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Return True if the sender may run a state-changing command here.
@@ -331,6 +335,92 @@ class BotCommands:
 
         await query.edit_message_text(f"✅ Модель оновлено на {model}. Файл .env перезаписано.")
 
+    async def moderation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/moderation on|off: send this chat's news to the admin who turned
+        it on for approval first, or publish directly. Without an argument,
+        shows the current mode."""
+        if update.effective_chat is None or update.message is None:
+            return
+
+        chat_id = str(update.effective_chat.id)
+        chat = self._telegram_bot.chats.get(chat_id)
+        mode = context.args[0].lower() if context.args else ""
+
+        if mode not in ("on", "off"):
+            status = "увімкнена ✅" if chat is not None and chat.reviewer_chat_id else "вимкнена"
+            await update.message.reply_text(
+                f"📝 Модерація для цього чату: {status}\n\n"
+                "/moderation on — новини спершу надходитимуть вам в особисті на перевірку\n"
+                "/moderation off — публікувати новини одразу"
+            )
+            return
+
+        if not await self._require_admin(update, context):
+            return
+        if chat is None:
+            await update.message.reply_text("⚠️ Чат не зареєстрований. Спочатку викличте /start.")
+            return
+
+        if mode == "off":
+            if await self._telegram_bot.set_reviewer(chat_id, None):
+                await update.message.reply_text("✅ Модерацію вимкнено. Новини публікуватимуться одразу.")
+            else:
+                await update.message.reply_text("❌ Не вдалося вимкнути модерацію.")
+            return
+
+        # An anonymous admin posts as the group itself, so there's no user
+        # whose private chat the drafts could go to.
+        if update.message.sender_chat is not None or update.effective_user is None:
+            await update.message.reply_text(
+                "⚠️ Анонімний адміністратор не може отримувати чернетки. "
+                "Вимкніть анонімність і повторіть /moderation on."
+            )
+            return
+
+        # Telegram only lets a bot message users who have started it, so
+        # check the reviewer's private chat is reachable before switching.
+        reviewer_chat_id = str(update.effective_user.id)
+        reachable = await self._telegram_bot.send_message(
+            reviewer_chat_id,
+            f"📝 Тепер чернетки новин для «{html.escape(chat.chat_name)}» надходитимуть сюди на перевірку.",
+        )
+        if not reachable:
+            await update.message.reply_text(
+                "⚠️ Не можу написати вам в особисті. Відкрийте чат зі мною, натисніть «Start» "
+                "і повторіть /moderation on."
+            )
+            return
+
+        if await self._telegram_bot.set_reviewer(chat_id, reviewer_chat_id):
+            await update.message.reply_text(
+                "✅ Модерацію увімкнено. Новини спершу надходитимуть вам в особисті на перевірку."
+            )
+        else:
+            await update.message.reply_text("❌ Не вдалося увімкнути модерацію.")
+
+    async def review_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle a reviewer pressing a draft's ✅/🔄/❌ button."""
+        query = update.callback_query
+        if query is None or update.effective_chat is None:
+            return
+
+        parts = (query.data or "").removeprefix(REVIEW_CALLBACK_PREFIX).split(":", 1)
+        if len(parts) != 2:
+            # The inert button left on an already handled draft.
+            await query.answer("Цю чернетку вже оброблено.")
+            return
+
+        # Answer right away: regenerating can take longer than Telegram
+        # waits for a callback answer.
+        await query.answer("⏳ Обробляю…")
+        action, article_id = parts
+        result = await self._publisher.handle_review(action, article_id, str(update.effective_chat.id))
+
+        if result.done:
+            await query.edit_message_reply_markup(reply_markup=review_done_keyboard(result.message))
+        elif query.message is not None:
+            await query.message.reply_text(result.message)
+
     async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show the available bot commands and their descriptions."""
         if update.message is None:
@@ -351,6 +441,8 @@ class BotCommands:
             "/removerss <url1>, <url2> — видалити один або кілька RSS-лінків цього чату\n"
             "/setprompt <текст> — зберегти власний prompt для цього чату\n"
             "/resetprompt — повернути використання стандартного prompt.txt\n"
+            "/moderation on|off — надсилати новини спершу вам в особисті на перевірку "
+            "(✅ опублікувати / 🔄 перегенерувати / ❌ пропустити) або публікувати одразу\n"
             "/stop — відписати цей чат від новин"
         )
         await update.message.reply_text(help_text)

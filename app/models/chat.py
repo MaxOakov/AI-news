@@ -14,13 +14,18 @@ class Chat:
     chat_type: str = "private"
     message_thread_id: int | None = None
     is_active: bool = True
+    # Moderation mode: the private chat (a user id) that drafts go to for
+    # approval before they're published here. None = publish directly.
+    reviewer_chat_id: str | None = None
 
     def to_dict(self) -> dict:
         """Shape this chat the way MongoDB expects it.
 
         `message_thread_id` is only included when set, so saving a chat
         without one (e.g. a plain /start) never clobbers a topic id that
-        was set earlier via /settopic.
+        was set earlier via /settopic. `reviewer_chat_id` is never included:
+        it's written only by ChatRepository.set_reviewer, so re-registering
+        a chat can't switch its moderation off.
         """
         data = {
             "chat_id": str(self.chat_id),
@@ -41,4 +46,5 @@ class Chat:
             chat_type=doc.get("chat_type", "private"),
             message_thread_id=doc.get("message_thread_id"),
             is_active=bool(doc.get("is_active", True)),
+            reviewer_chat_id=str(doc["reviewer_chat_id"]) if doc.get("reviewer_chat_id") else None,
         )

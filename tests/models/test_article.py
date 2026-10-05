@@ -89,3 +89,32 @@ def test_fail_count_round_trip():
 
 def test_from_dict_missing_fail_count_defaults_to_zero():
     assert Article.from_dict({"title": "T", "url": "https://x"}).fail_count == 0
+
+
+def test_new_fields_round_trip():
+    article = Article(
+        title="T", url="https://x", image_url="https://img", skipped=True,
+        review_chat_id="7", draft_text="Draft",
+    )
+    data = article.to_dict()
+    assert data["image_url"] == "https://img"
+    assert data["skipped"] is True
+    assert data["review_chat_id"] == "7"
+    assert data["draft_text"] == "Draft"
+
+    back = Article.from_dict(data)
+    assert (back.image_url, back.skipped, back.review_chat_id, back.draft_text) == (
+        "https://img", True, "7", "Draft"
+    )
+
+
+def test_unset_new_fields_are_omitted():
+    data = Article(title="T", url="https://x").to_dict()
+    for key in ("image_url", "skipped", "review_chat_id", "draft_text"):
+        assert key not in data
+
+
+def test_preview_url_prefers_image_then_article_page():
+    assert Article(title="T", url="https://x", image_url="https://img").preview_url == "https://img"
+    assert Article(title="T", url="https://x").preview_url == "https://x"
+    assert Article(title="T", url="").preview_url is None

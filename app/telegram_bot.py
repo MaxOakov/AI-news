@@ -1,4 +1,4 @@
-from telegram import Bot
+from telegram import Bot, LinkPreviewOptions
 from telegram.error import BadRequest
 from app.db.chat_repository import ChatRepository
 from app.models import Chat
@@ -65,22 +65,20 @@ class TelegramBot:
                 message_thread_id=message_thread_id,
             )
 
-            if chat.message_thread_id is None:
-                # register() only writes message_thread_id to MongoDB when
-                # it's set, so a plain /start after /settopic doesn't
-                # clobber the stored topic id there. Mirror that here: don't
-                # let a None from this call erase a topic id we already
-                # know about, whether it's cached in-memory or (e.g. after
-                # /stop evicted this chat from the cache) still sitting in
-                # the database.
-                async with self._chats_lock:
-                    existing = self.chats.get(chat.chat_id)
-                if existing is not None:
+            # register() only writes message_thread_id to MongoDB when it's
+            # set, and never writes reviewer_chat_id, so a plain /start after
+            # /settopic or /moderation on doesn't clobber either one there.
+            # Mirror that here: carry both over from what we already know
+            # about this chat, whether it's cached in-memory or (e.g. after
+            # /stop evicted it from the cache) still sitting in the database.
+            async with self._chats_lock:
+                existing = self.chats.get(chat.chat_id)
+            if existing is None:
+                existing = await asyncio.to_thread(self._chat_repository.get, chat.chat_id)
+            if existing is not None:
+                if chat.message_thread_id is None:
                     chat.message_thread_id = existing.message_thread_id
-                else:
-                    stored = await asyncio.to_thread(self._chat_repository.get, chat.chat_id)
-                    if stored is not None:
-                        chat.message_thread_id = stored.message_thread_id
+                chat.reviewer_chat_id = existing.reviewer_chat_id
 
             await asyncio.to_thread(self._chat_repository.register, chat)
             async with self._chats_lock:
@@ -108,14 +106,37 @@ class TelegramBot:
             print(f"❌ Помилка: {e}")
             return False
 
+    async def set_reviewer(self, chat_id: str, reviewer_chat_id: str | None) -> bool:
+        """Turn moderation on for a chat (drafts go to `reviewer_chat_id`)
+        or off (None), in the DB and the in-memory cache."""
+        chat_id = str(chat_id)
+        reviewer_chat_id = str(reviewer_chat_id) if reviewer_chat_id is not None else None
+        try:
+            await asyncio.to_thread(self._chat_repository.set_reviewer, chat_id, reviewer_chat_id)
+            async with self._chats_lock:
+                chat = self.chats.get(chat_id)
+                if chat is not None:
+                    chat.reviewer_chat_id = reviewer_chat_id
+            return True
+        except Exception as e:
+            print(f"❌ Не вдалося зберегти модератора для чату {chat_id}: {e}")
+            return False
+
     async def send_message(
         self,
         chat_id: str,
         text: str,
         parse_mode: str = "HTML",
         message_thread_id: int | None = None,
+        link_preview_url: str | None = None,
+        reply_markup=None,
     ) -> bool:
-        """Send a message to a specific chat or forum topic."""
+        """Send a message to a specific chat or forum topic.
+
+        `link_preview_url` shows that URL (an image, or a page whose og:image
+        Telegram picks up) as a large preview above the text, whether or not
+        it appears in the text itself.
+        """
         if self.bot is None:
             print("❌ TELEGRAM_TOKEN is not configured. Message not sent.")
             return False
@@ -130,6 +151,12 @@ class TelegramBot:
                 payload["message_thread_id"] = int(message_thread_id)
             except (TypeError, ValueError):
                 payload.pop("message_thread_id", None)
+        if link_preview_url:
+            payload["link_preview_options"] = LinkPreviewOptions(
+                url=link_preview_url, prefer_large_media=True, show_above_text=True
+            )
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
 
         try:
             await _send_once(self.bot, payload)

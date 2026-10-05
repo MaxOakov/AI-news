@@ -3,12 +3,15 @@ import asyncio
 from app.db.article_repository import ArticleRepository
 from app.services.rss_service import RssFeedService
 from app.services.news_generator import NewsGenerator
+from app.services.publisher import ArticlePublisher
 from app.telegram_bot import TelegramBot
 
 
 class NewsPipeline:
     """Orchestrates one full run: fetch each chat's RSS feeds, pick the
-    newest unseen article, rewrite it via Gemini, and send it to the chat.
+    newest unseen article, rewrite it via Gemini, and hand it to the
+    ArticlePublisher (which posts it, or sends it for review in moderation
+    mode).
 
     Depends on the RSS, generation, persistence and Telegram layers through
     constructor injection rather than importing their singletons directly,
@@ -27,12 +30,14 @@ class NewsPipeline:
         news_generator: NewsGenerator,
         article_repository: ArticleRepository,
         telegram_bot: TelegramBot,
+        publisher: ArticlePublisher,
         max_concurrent_chats: int = 5,
     ):
         self._rss_feed_service = rss_feed_service
         self._news_generator = news_generator
         self._articles = article_repository
         self._telegram_bot = telegram_bot
+        self._publisher = publisher
         self._semaphore = asyncio.Semaphore(max_concurrent_chats)
 
     async def run(self, chat_id: str | None = None):
@@ -69,7 +74,7 @@ class NewsPipeline:
             await self._process_chat(chat_id, chat)
 
     async def _process_chat(self, chat_id, chat):
-        """Fetch feeds for one chat, pick an article, rewrite it, and send it."""
+        """Fetch feeds for one chat, pick an article, rewrite it, and publish it."""
         rss_feeds = await asyncio.to_thread(self._rss_feed_service.get_feeds_for_chat, chat_id)
         if not rss_feeds:
             print(f"ℹ️ У чату {chat_id} немає RSS-лінків. Пропускаємо.")
@@ -88,15 +93,4 @@ class NewsPipeline:
             await asyncio.to_thread(self._articles.record_failure, selected_article)
             return
 
-        sent = await self._telegram_bot.send_message(
-            chat_id,
-            news_text,
-            message_thread_id=chat.message_thread_id,
-        )
-
-        if sent:
-            await asyncio.to_thread(self._articles.mark_as_sent, selected_article.id)
-            print(f"📊 Відправлено в чат {chat_id}")
-        else:
-            print(f"❌ Не вдалося відправити статтю в чат {chat_id}")
-            await asyncio.to_thread(self._articles.record_failure, selected_article)
+        await self._publisher.publish(chat_id, chat, selected_article, news_text)

@@ -377,3 +377,82 @@ def test_download_feed_gives_up_past_the_total_deadline(monkeypatch):
 
     with pytest.raises(FeedFetchError, match="довше"):
         rss_service_module.download_feed("https://feed", client)
+
+
+# --------------------------------------------------------------------------
+# Entry images (shown as the post's link preview)
+# --------------------------------------------------------------------------
+def _store_one(rss_feed_service, article_repository, monkeypatch, **entry_attrs):
+    entry = _fake_entry(title="Pic")
+    for key, value in entry_attrs.items():
+        setattr(entry, key, value)
+    monkeypatch.setattr(rss_service_module.feedparser, "parse", lambda url: _fake_feed([entry]))
+    rss_feed_service.fetch_new_articles("1", ["https://feed"])
+    [doc] = article_repository._db.articles.docs
+    return doc.get("image_url")
+
+
+def test_image_from_media_content(rss_feed_service, article_repository, monkeypatch):
+    image = _store_one(
+        rss_feed_service, article_repository, monkeypatch,
+        media_content=[
+            {"url": "https://cdn/clip.mp4", "type": "video/mp4"},
+            {"url": "https://cdn/pic.jpg", "medium": "image"},
+        ],
+    )
+    assert image == "https://cdn/pic.jpg"
+
+
+def test_image_from_media_content_without_type(rss_feed_service, article_repository, monkeypatch):
+    image = _store_one(
+        rss_feed_service, article_repository, monkeypatch, media_content=[{"url": "https://cdn/pic"}]
+    )
+    assert image == "https://cdn/pic"
+
+
+def test_image_from_media_thumbnail(rss_feed_service, article_repository, monkeypatch):
+    image = _store_one(
+        rss_feed_service, article_repository, monkeypatch, media_thumbnail=[{"url": "https://cdn/thumb.jpg"}]
+    )
+    assert image == "https://cdn/thumb.jpg"
+
+
+def test_image_from_enclosure(rss_feed_service, article_repository, monkeypatch):
+    image = _store_one(
+        rss_feed_service, article_repository, monkeypatch,
+        links=[
+            {"rel": "alternate", "href": "https://site/article", "type": "text/html"},
+            {"rel": "enclosure", "href": "https://cdn/audio.mp3", "type": "audio/mpeg"},
+            {"rel": "enclosure", "href": "https://cdn/cover.png", "type": "image/png"},
+        ],
+    )
+    assert image == "https://cdn/cover.png"
+
+
+def test_image_from_img_tag_in_summary(rss_feed_service, article_repository, monkeypatch):
+    image = _store_one(
+        rss_feed_service, article_repository, monkeypatch,
+        summary='<p>Text</p><img class="x" src="https://cdn/inline.jpg?a=1&amp;b=2" alt="">',
+    )
+    assert image == "https://cdn/inline.jpg?a=1&b=2"
+
+
+def test_image_from_img_tag_in_content(rss_feed_service, article_repository, monkeypatch):
+    image = _store_one(
+        rss_feed_service, article_repository, monkeypatch,
+        content=[{"value": "<div><img src='https://cdn/full.jpg'></div>"}],
+    )
+    assert image == "https://cdn/full.jpg"
+
+
+def test_no_image(rss_feed_service, article_repository, monkeypatch):
+    assert _store_one(rss_feed_service, article_repository, monkeypatch) is None
+
+
+def test_non_http_image_urls_are_ignored(rss_feed_service, article_repository, monkeypatch):
+    image = _store_one(
+        rss_feed_service, article_repository, monkeypatch,
+        media_thumbnail=[{"url": "data:image/png;base64,AAAA"}],
+        summary='<img src="/relative/pic.jpg">',
+    )
+    assert image is None

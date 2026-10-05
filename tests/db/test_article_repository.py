@@ -269,3 +269,47 @@ def test_record_failure_swallows_db_errors(article_repository, sample_article, m
 
     monkeypatch.setattr(article_repository._db.articles, "update_one", always_fails)
     assert article_repository.record_failure(sample_article) is False  # must not raise
+
+
+# --------------------------------------------------------------------------
+# Moderation support
+# --------------------------------------------------------------------------
+def test_get_by_id_with_fake_string_id(article_repository, sample_article):
+    article_repository.create([sample_article])
+    assert article_repository.get_by_id(str(sample_article.id)).title == sample_article.title
+
+
+def test_get_by_id_converts_object_id_strings(article_repository):
+    # Real Mongo ids are ObjectIds; callback_data carries their str() form.
+    from bson import ObjectId
+
+    oid = ObjectId()
+    article_repository._db.articles.docs.append({"_id": oid, "title": "Real", "url": "https://a"})
+
+    found = article_repository.get_by_id(str(oid))
+
+    assert found.title == "Real"
+    assert found.id == oid
+
+
+def test_get_by_id_missing(article_repository):
+    assert article_repository.get_by_id("nope") is None
+
+
+def test_mark_pending_review_takes_article_out_of_queue(article_repository, sample_article):
+    article_repository.create([sample_article])
+
+    article_repository.mark_pending_review(sample_article.id, "7", "Draft")
+
+    stored = article_repository.get_by_id(sample_article.id)
+    assert (stored.review_chat_id, stored.draft_text, stored.is_sent) == ("7", "Draft", False)
+    assert article_repository.get_next_unsent() is None
+
+
+def test_mark_skipped(article_repository, sample_article):
+    article_repository.create([sample_article])
+
+    article_repository.mark_skipped(sample_article.id)
+
+    assert article_repository.get_by_id(sample_article.id).skipped is True
+    assert article_repository.get_next_unsent() is None

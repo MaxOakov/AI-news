@@ -22,6 +22,7 @@ def test_build_app_returns_wired_object_graph(monkeypatch):
     assert bot_commands._telegram_bot is telegram_bot
     assert bot_commands._scheduler_service is scheduler_service
     assert scheduler_service._pipeline._articles is article_repository
+    assert scheduler_service._pipeline._publisher is bot_commands._publisher
     assert article_repository._max_article_age is not None  # queue age limit is wired in
 
 

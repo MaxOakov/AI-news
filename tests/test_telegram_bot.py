@@ -200,3 +200,79 @@ async def test_send_message_other_bad_request_does_not_fall_back(telegram_bot, f
     assert ok is False
     assert fake_tg_bot._attempts == 3  # no extra plain-text attempt
     assert fake_tg_bot.sent == []
+
+
+# --------------------------------------------------------------------------
+# Link preview, buttons, moderation reviewer
+# --------------------------------------------------------------------------
+async def test_send_message_link_preview_above_text(telegram_bot, fake_tg_bot):
+    await telegram_bot.send_message("1", "hi", link_preview_url="https://img/x.jpg")
+
+    preview = fake_tg_bot.sent[0]["link_preview_options"]
+    assert preview.url == "https://img/x.jpg"
+    assert preview.prefer_large_media is True
+    assert preview.show_above_text is True
+
+
+async def test_send_message_reply_markup_is_passed(telegram_bot, fake_tg_bot):
+    markup = object()
+    await telegram_bot.send_message("1", "hi", reply_markup=markup)
+    assert fake_tg_bot.sent[0]["reply_markup"] is markup
+
+
+async def test_plain_text_fallback_keeps_preview_and_buttons(telegram_bot, fake_tg_bot):
+    from telegram.error import BadRequest
+
+    markup = object()
+    fake_tg_bot.fail_times(3, BadRequest("Can't parse entities: unsupported start tag"))
+
+    await telegram_bot.send_message("1", "<p>hi</p>", link_preview_url="https://img", reply_markup=markup)
+
+    [message] = fake_tg_bot.sent
+    assert message["parse_mode"] is None
+    assert message["link_preview_options"].url == "https://img"
+    assert message["reply_markup"] is markup
+
+
+async def test_set_reviewer_updates_cache_and_db(telegram_bot, chat_repository):
+    await telegram_bot.register_chat_db("1", "Chat", "group")
+
+    assert await telegram_bot.set_reviewer("1", 7) is True
+    assert telegram_bot.chats["1"].reviewer_chat_id == "7"
+    assert chat_repository.get("1").reviewer_chat_id == "7"
+
+    assert await telegram_bot.set_reviewer("1", None) is True
+    assert telegram_bot.chats["1"].reviewer_chat_id is None
+    assert chat_repository.get("1").reviewer_chat_id is None
+
+
+async def test_set_reviewer_repository_failure_returns_false(telegram_bot, chat_repository, monkeypatch):
+    await telegram_bot.register_chat_db("1", "Chat", "group")
+
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(chat_repository, "set_reviewer", boom)
+    assert await telegram_bot.set_reviewer("1", "7") is False
+    assert telegram_bot.chats["1"].reviewer_chat_id is None
+
+
+async def test_register_chat_db_keeps_reviewer(telegram_bot):
+    await telegram_bot.register_chat_db("1", "Chat", "group")
+    await telegram_bot.set_reviewer("1", "7")
+
+    await telegram_bot.register_chat_db("1", "Chat", "group")  # /start again
+    assert telegram_bot.chats["1"].reviewer_chat_id == "7"
+
+    await telegram_bot.register_chat_db("1", "Chat", "group", message_thread_id=5)  # /settopic
+    assert telegram_bot.chats["1"].reviewer_chat_id == "7"
+
+
+async def test_start_after_stop_keeps_reviewer_via_db_fallback(telegram_bot):
+    await telegram_bot.register_chat_db("1", "Chat", "group")
+    await telegram_bot.set_reviewer("1", "7")
+    await telegram_bot.deactivate_chat_db("1")  # evicts it from the cache
+
+    await telegram_bot.register_chat_db("1", "Chat", "group")
+
+    assert telegram_bot.chats["1"].reviewer_chat_id == "7"

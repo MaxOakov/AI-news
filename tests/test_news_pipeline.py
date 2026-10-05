@@ -201,6 +201,36 @@ async def test_article_that_keeps_failing_no_longer_blocks_the_queue(
     assert len(fake_tg_bot.sent) == 1  # "Broken" is skipped, "Good" goes out
 
 
+async def test_moderated_chat_gets_a_draft_instead_of_a_post(
+    news_pipeline, telegram_bot, rss_link_repository, article_repository, fake_tg_bot, monkeypatch
+):
+    await _register_chat_with_feed(telegram_bot, rss_link_repository, "1", "https://feed")
+    await telegram_bot.set_reviewer("1", "7")
+    monkeypatch.setattr(
+        rss_service_module.feedparser, "parse", lambda url: _feed_with_one_entry("Article")
+    )
+
+    await news_pipeline.run(chat_id="1")
+
+    [message] = fake_tg_bot.sent
+    assert message["chat_id"] == "7"  # the reviewer, not the chat
+    assert message["reply_markup"] is not None
+    assert article_repository.get_next_unsent("1") is None  # waiting on review, not re-drafted
+
+
+async def test_post_has_link_preview_of_entry_image(
+    news_pipeline, telegram_bot, rss_link_repository, fake_tg_bot, monkeypatch
+):
+    await _register_chat_with_feed(telegram_bot, rss_link_repository, "1", "https://feed")
+    feed = _feed_with_one_entry("Article")
+    feed.entries[0].media_content = [{"url": "https://cdn/pic.jpg", "medium": "image"}]
+    monkeypatch.setattr(rss_service_module.feedparser, "parse", lambda url: feed)
+
+    await news_pipeline.run(chat_id="1")
+
+    assert fake_tg_bot.sent[0]["link_preview_options"].url == "https://cdn/pic.jpg"
+
+
 async def test_message_thread_id_forwarded_to_send(
     news_pipeline, telegram_bot, rss_link_repository, fake_tg_bot, monkeypatch
 ):
@@ -280,11 +310,11 @@ async def test_chats_are_processed_concurrently_not_sequentially(
 
 
 async def test_max_concurrent_chats_bounds_the_semaphore(
-    rss_feed_service, news_generator, article_repository, telegram_bot, rss_link_repository, monkeypatch
+    rss_feed_service, news_generator, article_repository, telegram_bot, publisher, rss_link_repository, monkeypatch
 ):
     """The concurrency cap is configurable and actually enforced."""
     bounded_pipeline = NewsPipeline(
-        rss_feed_service, news_generator, article_repository, telegram_bot, max_concurrent_chats=1
+        rss_feed_service, news_generator, article_repository, telegram_bot, publisher, max_concurrent_chats=1
     )
     for chat_id, url in [("1", "https://feed-a"), ("2", "https://feed-b")]:
         await _register_chat_with_feed(telegram_bot, rss_link_repository, chat_id, url)

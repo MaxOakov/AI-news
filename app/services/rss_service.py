@@ -1,6 +1,8 @@
 import feedparser
 import datetime
 import functools
+import html
+import re
 import time
 from collections.abc import Callable
 
@@ -73,6 +75,40 @@ def _entry_guid(entry) -> str | None:
         return str(guid)
     link = getattr(entry, "link", None)
     return str(link) if link else None
+
+
+_IMG_SRC_RE = re.compile(r"""<img\b[^>]*?\bsrc=["']([^"']+)["']""", re.IGNORECASE)
+
+
+def _http_url(value) -> str | None:
+    url = str(value or "").strip()
+    return url if url.startswith(("http://", "https://")) else None
+
+
+def _entry_image(entry) -> str | None:
+    """The entry's image, if the feed provides one, in the order feeds most
+    commonly carry it: Media RSS (<media:content>, <media:thumbnail>), an
+    image <enclosure>, then the first <img> in the summary/content HTML."""
+    for media in getattr(entry, "media_content", None) or []:
+        medium = media.get("medium")
+        mime = str(media.get("type") or "")
+        if medium == "image" or mime.startswith("image/") or (medium is None and not mime):
+            if url := _http_url(media.get("url")):
+                return url
+    for thumbnail in getattr(entry, "media_thumbnail", None) or []:
+        if url := _http_url(thumbnail.get("url")):
+            return url
+    for link in getattr(entry, "links", None) or []:
+        if link.get("rel") == "enclosure" and str(link.get("type") or "").startswith("image/"):
+            if url := _http_url(link.get("href")):
+                return url
+    html_parts = [getattr(entry, "summary", "") or ""]
+    html_parts += [c.get("value", "") for c in getattr(entry, "content", None) or []]
+    for part in html_parts:
+        if match := _IMG_SRC_RE.search(part):
+            if url := _http_url(html.unescape(match.group(1))):
+                return url
+    return None
 
 
 class RssFeedService:
@@ -155,6 +191,7 @@ class RssFeedService:
                 is_sent=False,
                 chat_id=str(chat_id),
                 guid=guid,
+                image_url=_entry_image(entry),
             )
             self._articles.create([article], chat_id=str(chat_id))
             print(f"Збережено нову статтю для чату {chat_id}: '{entry.title}'")

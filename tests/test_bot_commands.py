@@ -189,6 +189,7 @@ async def test_show_help_lists_all_commands(bot_commands):
     for command in [
         "/start", "/help", "/runjob", "/news", "/settopic", "/addrss", "/removerss",
         "/listfeeds", "/setprompt", "/resetprompt", "/prompt", "/stop", "/gemini_version",
+        "/moderation",
     ]:
         assert command in text
 
@@ -510,3 +511,169 @@ async def test_set_model_callback_allowed_for_group_admin(bot_commands, news_gen
     await bot_commands.set_model_callback(update, make_context(bot=fake_tg_bot))
 
     assert news_generator.model == "other-model"
+
+
+# --------------------------------------------------------------------------
+# /moderation
+# --------------------------------------------------------------------------
+async def _register_group(telegram_bot, chat_id="-100"):
+    await telegram_bot.register_chat_db(chat_id, "News group", "supergroup")
+
+
+async def test_moderation_without_args_shows_status(bot_commands, telegram_bot):
+    await _register_group(telegram_bot)
+    update = make_update(chat_id="-100", chat_type="supergroup")
+
+    await bot_commands.moderation(update, make_context())
+    assert "вимкнена" in update.message.replies[0]
+
+    await telegram_bot.set_reviewer("-100", "7")
+    await bot_commands.moderation(update, make_context())
+    assert "увімкнена" in update.message.replies[1]
+
+
+async def test_moderation_on_sets_reviewer_after_reaching_them(bot_commands, telegram_bot, fake_tg_bot):
+    await _register_group(telegram_bot)
+    fake_tg_bot.make_admin(7)
+    update = make_update(chat_id="-100", chat_type="supergroup", user_id=7)
+
+    await bot_commands.moderation(update, make_context(args=["on"], bot=fake_tg_bot))
+
+    assert telegram_bot.chats["-100"].reviewer_chat_id == "7"
+    assert fake_tg_bot.sent[0]["chat_id"] == "7"  # confirmation in the admin's private chat
+    assert "News group" in fake_tg_bot.sent[0]["text"]
+    assert "увімкнено" in update.message.replies[0]
+
+
+async def test_moderation_on_unreachable_reviewer_leaves_it_off(bot_commands, telegram_bot, fake_tg_bot):
+    await _register_group(telegram_bot)
+    fake_tg_bot.make_admin(7)
+    fake_tg_bot.fail_times(99)  # the admin never started the bot privately
+    update = make_update(chat_id="-100", chat_type="supergroup", user_id=7)
+
+    await bot_commands.moderation(update, make_context(args=["on"], bot=fake_tg_bot))
+
+    assert telegram_bot.chats["-100"].reviewer_chat_id is None
+    assert "Start" in update.message.replies[0]
+
+
+async def test_moderation_on_by_anonymous_admin_is_refused(bot_commands, telegram_bot, fake_tg_bot):
+    await _register_group(telegram_bot)
+    update = make_update(chat_id="-100", chat_type="supergroup", sender_chat_id="-100")
+
+    await bot_commands.moderation(update, make_context(args=["on"], bot=fake_tg_bot))
+
+    assert telegram_bot.chats["-100"].reviewer_chat_id is None
+    assert fake_tg_bot.sent == []
+    assert "Анонімний" in update.message.replies[0]
+
+
+async def test_moderation_on_requires_admin(bot_commands, telegram_bot, fake_tg_bot):
+    await _register_group(telegram_bot)
+    update = make_update(chat_id="-100", chat_type="supergroup", user_id=7)  # not an admin
+
+    await bot_commands.moderation(update, make_context(args=["on"], bot=fake_tg_bot))
+
+    assert telegram_bot.chats["-100"].reviewer_chat_id is None
+    assert fake_tg_bot.sent == []
+
+
+async def test_moderation_on_unregistered_chat(bot_commands, telegram_bot, fake_tg_bot):
+    update = make_update(chat_id="-100", chat_type="private")
+
+    await bot_commands.moderation(update, make_context(args=["on"], bot=fake_tg_bot))
+
+    assert "/start" in update.message.replies[0]
+    assert fake_tg_bot.sent == []
+
+
+async def test_moderation_off_clears_reviewer(bot_commands, telegram_bot, chat_repository, fake_tg_bot):
+    await _register_group(telegram_bot)
+    await telegram_bot.set_reviewer("-100", "7")
+    fake_tg_bot.make_admin(7)
+    update = make_update(chat_id="-100", chat_type="supergroup", user_id=7)
+
+    await bot_commands.moderation(update, make_context(args=["OFF"], bot=fake_tg_bot))
+
+    assert telegram_bot.chats["-100"].reviewer_chat_id is None
+    assert chat_repository.get("-100").reviewer_chat_id is None
+    assert "вимкнено" in update.message.replies[0]
+
+
+async def test_moderation_no_message_is_noop(bot_commands):
+    await bot_commands.moderation(make_update(has_message=False), make_context(args=["on"]))
+
+
+# --------------------------------------------------------------------------
+# review_callback: the draft's ✅ / 🔄 / ❌ buttons
+# --------------------------------------------------------------------------
+async def _drafted_article(telegram_bot, publisher, article_repository):
+    from app.models import Article
+
+    await _register_group(telegram_bot)
+    await telegram_bot.set_reviewer("-100", "7")
+    article = Article(title="T", url="https://example.com/a", chat_id="-100")
+    article_repository.create([article])
+    await publisher.publish("-100", telegram_bot.chats["-100"], article, "Draft")
+    return article
+
+
+async def test_review_callback_publish_replaces_buttons_with_outcome(
+    bot_commands, telegram_bot, publisher, article_repository, fake_tg_bot
+):
+    article = await _drafted_article(telegram_bot, publisher, article_repository)
+    update = make_update(chat_id="7", has_message=False, callback_data=f"review:pub:{article.id}")
+
+    await bot_commands.review_callback(update, make_context())
+
+    query = update.callback_query
+    assert query.answers  # answered before the slow part
+    [markup] = query.markup_edits
+    [[button]] = markup.inline_keyboard
+    assert button.text == "✅ Опубліковано"
+    assert button.callback_data == "review:done"
+    assert fake_tg_bot.sent[-1]["chat_id"] == "-100"
+
+
+async def test_review_callback_failure_keeps_buttons_and_explains(
+    bot_commands, telegram_bot, publisher, article_repository, fake_tg_bot
+):
+    article = await _drafted_article(telegram_bot, publisher, article_repository)
+    fake_tg_bot.fail_times(fake_tg_bot._attempts + 99)
+    update = make_update(chat_id="7", has_message=False, callback_data=f"review:pub:{article.id}")
+
+    await bot_commands.review_callback(update, make_context())
+
+    query = update.callback_query
+    assert query.markup_edits == []
+    assert "Не вдалося опублікувати" in query.message.replies[0]
+
+
+async def test_review_callback_done_button(bot_commands):
+    update = make_update(chat_id="7", has_message=False, callback_data="review:done")
+
+    await bot_commands.review_callback(update, make_context())
+
+    query = update.callback_query
+    assert query.answers[0]["text"] == "Цю чернетку вже оброблено."
+    assert query.markup_edits == []
+
+
+async def test_review_callback_no_callback_query_is_noop(bot_commands):
+    await bot_commands.review_callback(make_update(), make_context())  # must not raise
+
+
+@pytest.mark.parametrize("mode, reply", [("on", "Не вдалося увімкнути"), ("off", "Не вдалося вимкнути")])
+async def test_moderation_db_failure_is_reported(bot_commands, telegram_bot, chat_repository, fake_tg_bot, monkeypatch, mode, reply):
+    await _register_group(telegram_bot)
+    fake_tg_bot.make_admin(7)
+
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(chat_repository, "set_reviewer", boom)
+    update = make_update(chat_id="-100", chat_type="supergroup", user_id=7)
+
+    await bot_commands.moderation(update, make_context(args=[mode], bot=fake_tg_bot))
+
+    assert reply in update.message.replies[0]

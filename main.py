@@ -15,6 +15,7 @@ from app.db.prompt_repository import PromptRepository
 from app.services.rss_service import RssFeedService
 from app.services.news_generator import NewsGenerator
 from app.services.model_settings import GeminiModelSettings
+from app.services.publisher import ArticlePublisher, REVIEW_CALLBACK_PREFIX
 from app.telegram_bot import TelegramBot
 from app.news_pipeline import NewsPipeline
 from app.scheduler import SchedulerService
@@ -43,11 +44,13 @@ def build_app():
 
     telegram_bot = TelegramBot(token=TELEGRAM_TOKEN, chat_repository=chat_repository)
 
-    news_pipeline = NewsPipeline(rss_feed_service, news_generator, article_repository, telegram_bot)
+    publisher = ArticlePublisher(article_repository, news_generator, telegram_bot)
+
+    news_pipeline = NewsPipeline(rss_feed_service, news_generator, article_repository, telegram_bot, publisher)
     scheduler_service = SchedulerService(news_pipeline)
 
     bot_commands = BotCommands(
-        telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings
+        telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings, publisher
     )
 
     return telegram_bot, scheduler_service, bot_commands, article_repository
@@ -88,6 +91,10 @@ async def main():
     application.add_handler(CommandHandler('gemini_version', bot_commands.gemini_version))
     application.add_handler(CallbackQueryHandler(
         bot_commands.set_model_callback, pattern=f"^{SET_MODEL_CALLBACK_PREFIX}"
+    ))
+    application.add_handler(CommandHandler('moderation', bot_commands.moderation))
+    application.add_handler(CallbackQueryHandler(
+        bot_commands.review_callback, pattern=f"^{REVIEW_CALLBACK_PREFIX}"
     ))
 
     async def run_scheduler_background():

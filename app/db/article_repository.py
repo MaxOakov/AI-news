@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+from bson import ObjectId
 from pymongo import ASCENDING
 
 from app.db.database import Database
@@ -85,6 +86,8 @@ class ArticleRepository:
                 {"is_sent": {"$exists": False}}
             ],
             "skipped": {"$exists": False},
+            # Already drafted and waiting on a reviewer (moderation mode).
+            "review_chat_id": {"$exists": False},
         }
         if chat_id is not None:
             query["chat_id"] = str(chat_id)
@@ -146,6 +149,30 @@ class ArticleRepository:
             print(f"Стаття з id {article_id} позначена як відправлена.")
         else:
             print(f"Не вдалося позначити статтю з id {article_id} як відправлену.")
+
+    def get_by_id(self, article_id) -> Article | None:
+        """Look an article up by its `_id`, given as the string form that
+        travels in a Telegram button's callback_data."""
+        if isinstance(article_id, str) and ObjectId.is_valid(article_id):
+            article_id = ObjectId(article_id)
+        doc = self._db.articles.find_one({"_id": article_id})
+        return Article.from_dict(doc) if doc else None
+
+    def mark_pending_review(self, article_id, review_chat_id: str, draft_text: str):
+        """Record that a draft of this article was sent to a reviewer.
+
+        Takes it out of get_next_unsent (so the next run drafts the next
+        article instead of this one again) and keeps the exact text the
+        reviewer saw, which is what gets published if they approve it.
+        """
+        self._db.articles.update_one(
+            {"_id": article_id},
+            {"$set": {"review_chat_id": str(review_chat_id), "draft_text": draft_text}},
+        )
+
+    def mark_skipped(self, article_id):
+        """Take an article out of the queue for good (e.g. a reviewer skipped it)."""
+        self._db.articles.update_one({"_id": article_id}, {"$set": {"skipped": True}})
 
     def record_failure(self, article: Article) -> bool:
         """Count one failed generate/send attempt for `article`.

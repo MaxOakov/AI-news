@@ -113,8 +113,21 @@ The commands below change shared chat configuration, so in group/supergroup chat
 | `/setprompt <text>` | Use a custom prompt for this chat instead of `prompt.txt` |
 | `/resetprompt` | Revert to the default `prompt.txt` |
 | `/stop` | Deactivate this chat's subscription (RSS feeds and custom prompt are kept; `/start` picks up where this left off) |
+| `/moderation on\|off` | Review news before it's published (see [Moderation](#moderation)). Without an argument, shows the current mode (anyone can check) |
 
 Each scheduled or manually-triggered run: fetches new entries from every RSS feed registered for a chat (up to the few most recent per feed per poll), picks the *newest* unsent article so the channel always posts the freshest news, rewrites it with Gemini, and sends it to that chat. Older unsent articles wait their turn, and once they're older than `MAX_ARTICLE_AGE_HOURS` they're left unposted, so stale news never surfaces later; and an article that fails to generate or send on 3 runs is skipped so it can't block the queue.
+
+Every post goes out with a large link preview above the text: the feed entry's own image if it has one (`media:content`, `media:thumbnail`, an image enclosure, or the first `<img>` in the summary), otherwise the article page, whose `og:image` Telegram picks up.
+
+## Moderation
+
+With `/moderation on`, a chat's news isn't published directly. Each run sends the draft to the private chat of the admin who turned moderation on, with three buttons:
+
+- **✅ Опублікувати** posts the draft to the chat exactly as shown
+- **🔄 Перегенерувати** asks Gemini for a new version and sends it as a new draft
+- **❌ Пропустити** drops the article
+
+Once a draft is handled, its buttons are replaced with the outcome, so handled drafts are easy to tell apart. The bot can only message users who have started it, so the admin has to open a private chat with the bot and press **Start** first; `/moderation on` checks this and says so if it can't reach them. It doesn't work for anonymous admins, since they post as the group and there's no private chat to send drafts to. `/moderation off` goes back to publishing directly; drafts already sent can still be handled.
 
 ## Custom Prompts
 

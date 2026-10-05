@@ -107,3 +107,18 @@ def test_deactivate_retries_then_succeeds(chat_repository, sample_chat, monkeypa
     chat_repository.deactivate("123")
     assert calls["n"] == 2
     assert chat_repository._db.chats.docs[0]["is_active"] is False
+
+
+def test_set_reviewer_on_and_off(chat_repository):
+    from app.models import Chat
+
+    chat_repository.register(Chat(chat_id="1", chat_name="Room"))
+
+    chat_repository.set_reviewer("1", "7")
+    assert chat_repository.get("1").reviewer_chat_id == "7"
+
+    chat_repository.register(Chat(chat_id="1", chat_name="Renamed"))  # e.g. /start again
+    assert chat_repository.get("1").reviewer_chat_id == "7"
+
+    chat_repository.set_reviewer("1", None)
+    assert chat_repository.get("1").reviewer_chat_id is None

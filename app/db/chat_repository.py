@@ -56,3 +56,17 @@ class ChatRepository:
             {"chat_id": str(chat_id)},
             {"$set": {"is_active": False}}
         )
+
+    @retry(
+        max_retries=3,
+        delay=1,
+        on_retry=lambda exc, attempt, total, *a, **kw: print(
+            f"⚠️ Помилка при збереженні модератора чату (спроба {attempt}/{total}): {exc}"
+        ),
+    )
+    def set_reviewer(self, chat_id: str, reviewer_chat_id: str | None):
+        """Turn moderation on (drafts go to `reviewer_chat_id`) or off (None)."""
+        return self._db.chats.update_one(
+            {"chat_id": str(chat_id)},
+            {"$set": {"reviewer_chat_id": reviewer_chat_id}}
+        )

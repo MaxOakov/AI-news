@@ -81,7 +81,7 @@ app/
    | Variable | Required | Description |
    |---|---|---|
    | `GEMINI_API_KEY` | Yes | API key for the Gemini client |
-   | `GEMINI_MODEL` | No | Gemini model name (defaults to `gemini-3.1-flash-lite-preview`) |
+   | `GEMINI_MODEL` | No | Default Gemini model, for chats that haven't picked their own with `/gemini_version` (defaults to `gemini-3.1-flash-lite-preview`) |
    | `TELEGRAM_TOKEN` | Yes | Bot token from BotFather |
    | `MONGODB_URL` | Yes | MongoDB connection string (database name used: `news`) |
    | `MAX_ARTICLE_AGE_HOURS` | No | Unsent articles published longer ago than this are never posted (defaults to `12`) |
@@ -118,7 +118,7 @@ Add the bot to a Telegram chat/channel (as admin, if it's a channel) and registe
 | `/runjob`, `/news` | Trigger a news run immediately, for this chat only |
 | `/listfeeds` | List RSS feeds registered for this chat |
 | `/prompt` | Show the active prompt for this chat |
-| `/gemini_version` | Show the current Gemini model with buttons to switch it. The model is global (all chats); pressing a button is admin-only in groups, applies immediately and is saved to `.env` |
+| `/gemini_version` | Show this chat's Gemini model with buttons to switch it, or to go back to the default (`GEMINI_MODEL`). Each chat has its own model, stored in MongoDB; pressing a button is admin-only in groups and applies from the chat's next post |
 
 The commands below change shared chat configuration, so in group/supergroup chats they're restricted to chat admins (anyone can use them in a private chat):
 

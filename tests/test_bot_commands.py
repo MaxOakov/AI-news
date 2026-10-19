@@ -435,82 +435,104 @@ async def test_gemini_version_no_message_is_noop(bot_commands):
     await bot_commands.gemini_version(make_update(has_message=False), make_context())  # must not raise
 
 
-async def test_gemini_version_shows_current_model_and_a_button_per_option(bot_commands):
+async def test_gemini_version_shows_the_chats_model_and_a_button_per_option(bot_commands):
     update = make_update()
     await bot_commands.gemini_version(update, make_context())
 
-    assert "fake-model" in update.message.replies[0]
+    assert "fake-model (за замовчуванням)" in update.message.replies[0]
     keyboard = update.message.reply_markups[0].inline_keyboard
-    assert [row[0].callback_data for row in keyboard] == ["set_model:fake-model", "set_model:other-model"]
+    assert [row[0].callback_data for row in keyboard] == [
+        "set_model:fake-model", "set_model:other-model", "set_model:-",
+    ]
+    assert keyboard[2][0].text == "✅ За замовчуванням (fake-model)"
+
+
+async def test_gemini_version_marks_the_chats_own_choice(bot_commands, model_settings):
+    model_settings.set_for_chat("123", "other-model")
+    update = make_update(chat_id="123")
+
+    await bot_commands.gemini_version(update, make_context())
+
+    assert "other-model (обрана для цього чату)" in update.message.replies[0]
+    labels = [row[0].text for row in update.message.reply_markups[0].inline_keyboard]
+    assert labels == ["fake-model", "✅ other-model", "За замовчуванням (fake-model)"]
 
 
 async def test_set_model_callback_no_callback_query_is_noop(bot_commands):
     await bot_commands.set_model_callback(make_update(), make_context())  # must not raise
 
 
-async def test_set_model_callback_switches_model(bot_commands, news_generator, env_path, monkeypatch):
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
-    update = make_update(has_message=False, callback_data="set_model:other-model")
+async def test_set_model_callback_switches_only_this_chat(bot_commands, model_settings):
+    update = make_update(chat_id="123", has_message=False, callback_data="set_model:other-model")
 
     await bot_commands.set_model_callback(update, make_context())
 
-    assert news_generator.model == "other-model"
-    assert "GEMINI_MODEL=other-model" in env_path.read_text(encoding="utf-8")
+    assert model_settings.model_for_chat("123") == "other-model"
+    assert model_settings.model_for_chat("456") == "fake-model"
     assert update.callback_query.answers == [{"text": None, "show_alert": False}]
-    assert "other-model" in update.callback_query.edits[0]
+    assert update.callback_query.edits == ["✅ Модель для цього чату: other-model."]
 
 
-async def test_set_model_callback_rejects_unknown_model(bot_commands, news_generator, env_path):
+async def test_set_model_callback_back_to_default(bot_commands, model_settings, fake_db_handle):
+    model_settings.set_for_chat("123", "other-model")
+    update = make_update(chat_id="123", has_message=False, callback_data="set_model:-")
+
+    await bot_commands.set_model_callback(update, make_context())
+
+    assert model_settings.chat_choice("123") is None
+    assert fake_db_handle.chat_models.docs == []
+    assert "за замовчуванням: fake-model" in update.callback_query.edits[0]
+
+
+async def test_set_model_callback_rejects_unknown_model(bot_commands, model_settings, fake_db_handle):
     update = make_update(has_message=False, callback_data="set_model:evil-model")
 
     await bot_commands.set_model_callback(update, make_context())
 
-    assert news_generator.model == "fake-model"
-    assert not env_path.exists()
+    assert fake_db_handle.chat_models.docs == []
     assert "доступних моделей" in update.callback_query.edits[0]
 
 
-async def test_set_model_callback_rejects_malformed_data(bot_commands, news_generator):
+async def test_set_model_callback_rejects_malformed_data(bot_commands, fake_db_handle):
     update = make_update(has_message=False, callback_data="something_else")
 
     await bot_commands.set_model_callback(update, make_context())
 
-    assert news_generator.model == "fake-model"
+    assert fake_db_handle.chat_models.docs == []
     assert "Невірна команда" in update.callback_query.edits[0]
 
 
-async def test_set_model_callback_reports_env_write_failure(bot_commands, news_generator, model_settings, monkeypatch):
-    def boom(model):
-        raise OSError("read-only fs")
+async def test_set_model_callback_reports_db_failure(bot_commands, model_settings, monkeypatch):
+    def boom(chat_id, model):
+        raise RuntimeError("db down")
 
-    monkeypatch.setattr(model_settings, "set_model", boom)
+    monkeypatch.setattr(model_settings, "set_for_chat", boom)
     update = make_update(has_message=False, callback_data="set_model:other-model")
 
     await bot_commands.set_model_callback(update, make_context())
 
-    assert news_generator.model == "fake-model"
-    assert "Не вдалося оновити" in update.callback_query.edits[0]
+    assert "Не вдалося зберегти модель" in update.callback_query.edits[0]
 
 
-async def test_set_model_callback_blocked_for_non_admin_in_group(bot_commands, news_generator, env_path, fake_tg_bot):
+async def test_set_model_callback_blocked_for_non_admin_in_group(bot_commands, fake_db_handle, fake_tg_bot):
     update = make_update(chat_type="supergroup", user_id=7, has_message=False, callback_data="set_model:other-model")
 
     await bot_commands.set_model_callback(update, make_context(bot=fake_tg_bot))
 
-    assert news_generator.model == "fake-model"
-    assert not env_path.exists()
+    assert fake_db_handle.chat_models.docs == []
     assert update.callback_query.answers[0]["show_alert"] is True
     assert update.callback_query.edits == []
 
 
-async def test_set_model_callback_allowed_for_group_admin(bot_commands, news_generator, fake_tg_bot, monkeypatch):
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+async def test_set_model_callback_allowed_for_group_admin(bot_commands, model_settings, fake_tg_bot):
     fake_tg_bot.make_admin(7)
-    update = make_update(chat_type="supergroup", user_id=7, has_message=False, callback_data="set_model:other-model")
+    update = make_update(
+        chat_id="-100", chat_type="supergroup", user_id=7, has_message=False, callback_data="set_model:other-model"
+    )
 
     await bot_commands.set_model_callback(update, make_context(bot=fake_tg_bot))
 
-    assert news_generator.model == "other-model"
+    assert model_settings.model_for_chat("-100") == "other-model"
 
 
 # --------------------------------------------------------------------------

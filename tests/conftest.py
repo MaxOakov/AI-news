@@ -12,6 +12,7 @@ import pytest
 
 from app.bot_commands import BotCommands
 from app.db.article_repository import ArticleRepository
+from app.db.chat_model_repository import ChatModelRepository
 from app.db.chat_repository import ChatRepository
 from app.db.database import Database
 from app.db.instagram_post_repository import InstagramPostRepository
@@ -95,6 +96,7 @@ def fake_db_handle():
         chats=FakeCollection(),
         rss_links=FakeCollection(),
         chat_prompts=FakeCollection(),
+        chat_models=FakeCollection(),
         instagram_posts=FakeCollection(),
         instagram_settings=FakeCollection(),
     )
@@ -161,8 +163,18 @@ def fake_genai_client():
 
 
 @pytest.fixture
-def news_generator(prompt_repository, fake_genai_client):
-    return NewsGenerator("fake-model", prompt_repository, client=fake_genai_client)
+def chat_model_repository(database):
+    return ChatModelRepository(database)
+
+
+@pytest.fixture
+def model_settings(chat_model_repository):
+    return GeminiModelSettings(chat_model_repository, ["fake-model", "other-model"], "fake-model")
+
+
+@pytest.fixture
+def news_generator(model_settings, prompt_repository, fake_genai_client):
+    return NewsGenerator(model_settings, prompt_repository, client=fake_genai_client)
 
 
 # --------------------------------------------------------------------------
@@ -228,16 +240,6 @@ def news_pipeline(rss_feed_service, news_generator, article_repository, telegram
 @pytest.fixture
 def scheduler_service(news_pipeline):
     return SchedulerService(news_pipeline, active_hours=range(8, 23))
-
-
-@pytest.fixture
-def env_path(tmp_path):
-    return tmp_path / ".env"
-
-
-@pytest.fixture
-def model_settings(news_generator, env_path):
-    return GeminiModelSettings(news_generator, ["fake-model", "other-model"], env_path)
 
 
 @pytest.fixture

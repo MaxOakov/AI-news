@@ -38,6 +38,9 @@ def test_build_app_returns_wired_object_graph(main_module):
     assert scheduler_service._pipeline._articles is app.article_repository
     assert scheduler_service._pipeline._publisher is bot_commands._publisher
     assert app.article_repository._max_article_age is not None  # queue age limit is wired in
+    # The per-chat model the commands change is the one generation reads.
+    assert scheduler_service._pipeline._news_generator._models is bot_commands._model_settings
+    assert bot_commands._model_settings.default == "fake-model"
 
     # Instagram: one settings service shared by the commands that change it
     # and the forwarder that reads it; the publisher hands posts to the forwarder.

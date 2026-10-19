@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from app.config import (
-    TELEGRAM_TOKEN, MONGODB_URL, GEMINI_MODEL, GEMINI_MODEL_OPTIONS, ENV_PATH, MAX_ARTICLE_AGE_HOURS,
+    TELEGRAM_TOKEN, MONGODB_URL, GEMINI_MODEL, GEMINI_MODEL_OPTIONS, MAX_ARTICLE_AGE_HOURS,
     SECRETS_ENCRYPTION_KEY, INSTAGRAM_GRAPH_API_VERSION,
 )
 from app.db.database import Database
@@ -14,6 +14,7 @@ from app.db.article_repository import ArticleRepository
 from app.db.chat_repository import ChatRepository
 from app.db.rss_link_repository import RssLinkRepository
 from app.db.prompt_repository import PromptRepository
+from app.db.chat_model_repository import ChatModelRepository
 from app.db.instagram_post_repository import InstagramPostRepository
 from app.db.instagram_settings_repository import InstagramSettingsRepository
 from app.services.rss_service import RssFeedService
@@ -77,8 +78,8 @@ def build_app() -> App:
     prompt_repository = PromptRepository(database)
 
     rss_feed_service = RssFeedService(article_repository, rss_link_repository)
-    news_generator = NewsGenerator(GEMINI_MODEL, prompt_repository)
-    model_settings = GeminiModelSettings(news_generator, GEMINI_MODEL_OPTIONS, ENV_PATH)
+    model_settings = GeminiModelSettings(ChatModelRepository(database), GEMINI_MODEL_OPTIONS, GEMINI_MODEL)
+    news_generator = NewsGenerator(model_settings, prompt_repository)
 
     telegram_bot = TelegramBot(token=TELEGRAM_TOKEN, chat_repository=chat_repository)
 

@@ -1,70 +1,48 @@
-import os
-from pathlib import Path
-
-from app.services.news_generator import NewsGenerator
-
-_ENV_KEY = "GEMINI_MODEL"
-
-
-def update_gemini_model_in_env(env_path: Path, model: str) -> None:
-    """Set GEMINI_MODEL=<model> in the .env file, creating the file if needed.
-
-    Every other line is preserved as-is; an existing GEMINI_MODEL line is
-    replaced in place, otherwise the key is appended. Raises OSError on
-    I/O failure so the caller decides how to report it.
-    """
-    if env_path.exists():
-        lines = env_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    else:
-        lines = []
-
-    updated_lines = []
-    found = False
-    for line in lines:
-        if line.strip().startswith(f"{_ENV_KEY}="):
-            if not found:
-                updated_lines.append(f"{_ENV_KEY}={model}")
-                found = True
-            # drop duplicate GEMINI_MODEL lines so the file stays unambiguous
-        else:
-            updated_lines.append(line)
-
-    if not found:
-        updated_lines.append(f"{_ENV_KEY}={model}")
-
-    env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+from app.db.chat_model_repository import ChatModelRepository
 
 
 class GeminiModelSettings:
-    """Switches the Gemini model used for generation at runtime.
+    """Which Gemini model each chat's news are written with.
 
-    Applies the choice to the live NewsGenerator immediately (the next
-    generation call uses it) and persists it to .env so it survives a
-    restart. The model is global: it applies to every chat.
+    A chat's own choice (/gemini_version) is stored in MongoDB; chats
+    without one use `default_model` (GEMINI_MODEL from .env). Only models
+    in `options` can be chosen, and a stored choice that's no longer an
+    option falls back to the default instead of breaking generation.
     """
 
-    def __init__(self, news_generator: NewsGenerator, options: list[str], env_path: Path):
-        self._generator = news_generator
+    def __init__(self, repository: ChatModelRepository, options: list[str], default_model: str):
+        self._repository = repository
         self._options = list(options)
-        self._env_path = env_path
+        self._default = default_model
 
     @property
-    def current(self) -> str:
-        return self._generator.model
+    def default(self) -> str:
+        return self._default
 
     @property
     def options(self) -> list[str]:
         return list(self._options)
 
-    def set_model(self, model: str) -> None:
-        """Persist and apply `model`.
+    def chat_choice(self, chat_id) -> str | None:
+        """The model this chat picked itself, or None if it uses the default."""
+        try:
+            model = self._repository.get(str(chat_id))
+        except Exception as exc:
+            print(f"⚠️ Не вдалося прочитати модель Gemini чату {chat_id}: {exc}")
+            return None
+        return model if model in self._options else None
 
-        Raises ValueError for a model not in `options`, OSError if .env
-        can't be written (in which case the running model is unchanged).
-        """
+    def model_for_chat(self, chat_id) -> str:
+        """The model to generate this chat's news with."""
+        if chat_id is None:
+            return self._default
+        return self.chat_choice(chat_id) or self._default
+
+    def set_for_chat(self, chat_id, model: str) -> None:
+        """Raises ValueError for a model not in `options`."""
         if model not in self._options:
             raise ValueError(f"Невідома модель: {model}")
+        self._repository.save(str(chat_id), model)
 
-        update_gemini_model_in_env(self._env_path, model)
-        os.environ[_ENV_KEY] = model
-        self._generator.model = model
+    def reset_for_chat(self, chat_id) -> None:
+        self._repository.reset(str(chat_id))

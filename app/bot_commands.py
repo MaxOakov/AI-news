@@ -13,6 +13,8 @@ from app.services.publisher import REVIEW_CALLBACK_PREFIX, ArticlePublisher, rev
 from app.telegram_bot import TelegramBot
 
 SET_MODEL_CALLBACK_PREFIX = "set_model:"
+# callback_data value (after the prefix) of the "use the default model" button.
+DEFAULT_MODEL_CHOICE = "-"
 
 
 class BotCommands:
@@ -263,28 +265,41 @@ class BotCommands:
             await update.message.reply_text("❌ Не вдалося відписати чат.")
 
     async def gemini_version(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show the current Gemini model with inline buttons to switch it."""
-        if update.message is None:
+        """Show this chat's Gemini model with inline buttons to switch it."""
+        if update.message is None or update.effective_chat is None:
             return
 
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(option, callback_data=f"{SET_MODEL_CALLBACK_PREFIX}{option}")]
+        chat_id = str(update.effective_chat.id)
+        choice = await asyncio.to_thread(self._model_settings.chat_choice, chat_id)
+        current = choice or self._model_settings.default
+        default = self._model_settings.default
+
+        rows = [
+            [InlineKeyboardButton(
+                f"✅ {option}" if option == choice else option,
+                callback_data=f"{SET_MODEL_CALLBACK_PREFIX}{option}",
+            )]
             for option in self._model_settings.options
-        ])
+        ]
+        rows.append([InlineKeyboardButton(
+            f"{'✅ ' if choice is None else ''}За замовчуванням ({default})",
+            callback_data=f"{SET_MODEL_CALLBACK_PREFIX}{DEFAULT_MODEL_CHOICE}",
+        )])
+        source = "обрана для цього чату" if choice else "за замовчуванням"
         await update.message.reply_text(
-            f"🤖 Поточна модель Gemini: {self._model_settings.current}\n"
-            "Оберіть модель (змінюється для всіх чатів і зберігається в .env):",
-            reply_markup=keyboard,
+            f"🤖 Модель Gemini для цього чату: {current} ({source})\n"
+            "Оберіть модель (змінюється лише для цього чату):",
+            reply_markup=InlineKeyboardMarkup(rows),
         )
 
     async def set_model_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle a model-selection button press from /gemini_version.
 
-        The model is global (shared by every chat), so the switch is
-        admin-gated like the other state-changing commands.
+        Applies to the chat the button was pressed in, and is admin-gated
+        like the other state-changing commands.
         """
         query = update.callback_query
-        if query is None:
+        if query is None or update.effective_chat is None:
             return
 
         if not await self._require_admin(update, context):
@@ -297,19 +312,28 @@ class BotCommands:
             await query.edit_message_text("❌ Невірна команда вибору моделі.")
             return
 
+        chat_id = str(update.effective_chat.id)
         model = data.removeprefix(SET_MODEL_CALLBACK_PREFIX)
-        if model not in self._model_settings.options:
+        if model != DEFAULT_MODEL_CHOICE and model not in self._model_settings.options:
             await query.edit_message_text("⚠️ Оберіть, будь ласка, одну з доступних моделей.")
             return
 
         try:
-            await asyncio.to_thread(self._model_settings.set_model, model)
-        except OSError as e:
-            print(f"❌ Не вдалося оновити .env: {e}")
-            await query.edit_message_text("❌ Не вдалося оновити файл .env. Спробуйте пізніше.")
+            if model == DEFAULT_MODEL_CHOICE:
+                await asyncio.to_thread(self._model_settings.reset_for_chat, chat_id)
+            else:
+                await asyncio.to_thread(self._model_settings.set_for_chat, chat_id, model)
+        except Exception as e:
+            print(f"❌ Не вдалося зберегти модель Gemini для чату {chat_id}: {e}")
+            await query.edit_message_text("❌ Не вдалося зберегти модель. Спробуйте пізніше.")
             return
 
-        await query.edit_message_text(f"✅ Модель оновлено на {model}. Файл .env перезаписано.")
+        if model == DEFAULT_MODEL_CHOICE:
+            await query.edit_message_text(
+                f"✅ Цей чат знову використовує модель за замовчуванням: {self._model_settings.default}."
+            )
+        else:
+            await query.edit_message_text(f"✅ Модель для цього чату: {model}.")
 
     async def moderation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """/moderation on|off: send this chat's news to the admin who turned
@@ -411,7 +435,7 @@ class BotCommands:
             "/news — те саме, що /runjob\n"
             "/listfeeds — показати RSS-лінки цього чату\n"
             "/prompt — показати активний prompt цього чату\n"
-            "/gemini_version — показати поточну модель Gemini (змінити можуть лише адміністратори)\n"
+            "/gemini_version — показати й змінити модель Gemini для цього чату (змінити можуть лише адміністратори)\n"
             "\nКоманди нижче доступні лише адміністраторам чату (у групах):\n"
             "/settopic — встановити поточну тему форуму для надсилання новин\n"
             "/addrss <url1>, <url2> — додати один або кілька RSS-лінків для цього чату\n"

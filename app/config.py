@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from dotenv import load_dotenv
 
 
@@ -7,7 +6,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ----------------- Налаштування -----------------
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")  # Модель за замовчуванням
+# Модель за замовчуванням — для чатів, що не обрали свою через /gemini_version
+# (вибір кожного чату зберігається в MongoDB, колекція chat_models)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MONGODB_URL = os.getenv("MONGODB_URL")
 
@@ -21,8 +22,6 @@ GEMINI_MODEL_OPTIONS = [
     "gemini-3.1-flash-lite-preview",
 ]
 
-# .env у корені проєкту (у Docker це змонтований каталог хоста, тож зміни зберігаються)
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
 # ----------------- Instagram -----------------

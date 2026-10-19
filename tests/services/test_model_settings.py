@@ -1,89 +1,69 @@
-import os
-
 import pytest
 
-from app.services.model_settings import update_gemini_model_in_env
+
+def test_chats_without_a_choice_use_the_default(model_settings):
+    assert model_settings.default == "fake-model"
+    assert model_settings.chat_choice("1") is None
+    assert model_settings.model_for_chat("1") == "fake-model"
+    assert model_settings.model_for_chat(None) == "fake-model"
 
 
-@pytest.fixture(autouse=True)
-def restore_environ(monkeypatch):
-    # set_model writes os.environ; monkeypatch undoes it after each test
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+def test_each_chat_keeps_its_own_model(model_settings, fake_db_handle):
+    model_settings.set_for_chat("1", "other-model")
+
+    assert model_settings.model_for_chat("1") == "other-model"
+    assert model_settings.model_for_chat(1) == "other-model"  # ids are normalized to str
+    assert model_settings.model_for_chat("2") == "fake-model"
+    [doc] = fake_db_handle.chat_models.docs
+    assert (doc["chat_id"], doc["model"]) == ("1", "other-model")
 
 
-# --------------------------------------------------------------------------
-# update_gemini_model_in_env
-# --------------------------------------------------------------------------
-def test_update_env_creates_missing_file(env_path):
-    update_gemini_model_in_env(env_path, "m1")
-    assert env_path.read_text(encoding="utf-8") == "GEMINI_MODEL=m1\n"
+def test_changing_the_model_again_updates_in_place(model_settings, fake_db_handle):
+    model_settings.set_for_chat("1", "other-model")
+    model_settings.set_for_chat("1", "fake-model")
+
+    assert len(fake_db_handle.chat_models.docs) == 1
+    assert model_settings.chat_choice("1") == "fake-model"
 
 
-def test_update_env_replaces_existing_key_and_keeps_other_lines(env_path):
-    env_path.write_text("TELEGRAM_TOKEN=abc\nGEMINI_MODEL=old\nMONGODB_URL=x\n", encoding="utf-8")
+def test_reset_goes_back_to_the_default(model_settings):
+    model_settings.set_for_chat("1", "other-model")
 
-    update_gemini_model_in_env(env_path, "new")
+    model_settings.reset_for_chat("1")
 
-    assert env_path.read_text(encoding="utf-8").splitlines() == [
-        "TELEGRAM_TOKEN=abc", "GEMINI_MODEL=new", "MONGODB_URL=x",
-    ]
-
-
-def test_update_env_appends_key_when_absent(env_path):
-    env_path.write_text("TELEGRAM_TOKEN=abc\n", encoding="utf-8")
-    update_gemini_model_in_env(env_path, "m1")
-    assert env_path.read_text(encoding="utf-8").splitlines() == ["TELEGRAM_TOKEN=abc", "GEMINI_MODEL=m1"]
+    assert model_settings.chat_choice("1") is None
+    assert model_settings.model_for_chat("1") == "fake-model"
 
 
-def test_update_env_collapses_duplicate_keys(env_path):
-    env_path.write_text("GEMINI_MODEL=a\nX=1\nGEMINI_MODEL=b\n", encoding="utf-8")
-    update_gemini_model_in_env(env_path, "c")
-    assert env_path.read_text(encoding="utf-8").splitlines() == ["GEMINI_MODEL=c", "X=1"]
-
-
-# --------------------------------------------------------------------------
-# GeminiModelSettings
-# --------------------------------------------------------------------------
-def test_current_reflects_generator_model(model_settings):
-    assert model_settings.current == "fake-model"
-
-
-def test_set_model_applies_to_generator_env_and_file(model_settings, news_generator, env_path):
-    model_settings.set_model("other-model")
-
-    assert news_generator.model == "other-model"
-    assert model_settings.current == "other-model"
-    assert os.environ["GEMINI_MODEL"] == "other-model"
-    assert "GEMINI_MODEL=other-model" in env_path.read_text(encoding="utf-8")
-
-
-def test_set_model_rejects_unknown_model(model_settings, news_generator, env_path):
+def test_unknown_model_is_rejected(model_settings, fake_db_handle):
     with pytest.raises(ValueError):
-        model_settings.set_model("nope")
-    assert news_generator.model == "fake-model"
-    assert not env_path.exists()
+        model_settings.set_for_chat("1", "nope")
+    assert fake_db_handle.chat_models.docs == []
 
 
-def test_set_model_io_failure_leaves_running_model_unchanged(model_settings, news_generator, monkeypatch):
-    def boom(*args, **kwargs):
-        raise OSError("read-only fs")
+def test_stored_model_that_is_no_longer_an_option_falls_back(model_settings, chat_model_repository):
+    chat_model_repository.save("1", "retired-model")
 
-    monkeypatch.setattr("app.services.model_settings.update_gemini_model_in_env", boom)
-
-    with pytest.raises(OSError):
-        model_settings.set_model("other-model")
-    assert news_generator.model == "fake-model"
-    assert "GEMINI_MODEL" not in os.environ
+    assert model_settings.chat_choice("1") is None
+    assert model_settings.model_for_chat("1") == "fake-model"
 
 
-async def test_generator_uses_switched_model(
+def test_db_error_falls_back_to_the_default(model_settings, chat_model_repository, monkeypatch):
+    def boom(chat_id):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(chat_model_repository, "get", boom)
+
+    assert model_settings.model_for_chat("1") == "fake-model"
+
+
+async def test_generator_uses_the_chats_model(
     model_settings, news_generator, fake_genai_client, sample_article, prompt_repository
 ):
-    prompt_repository.save_custom("1", "{title} {summary} {url}")
     fake_genai_client.set_response("ok")
-    model_settings.set_model("other-model")
+    model_settings.set_for_chat("1", "other-model")
 
     await news_generator.generate(sample_article, chat_id="1")
+    await news_generator.generate(sample_article, chat_id="2")
 
-    model, _ = fake_genai_client.calls[0]
-    assert model == "other-model"
+    assert [model for model, _ in fake_genai_client.calls] == ["other-model", "fake-model"]

@@ -55,6 +55,21 @@ class TelegramBot:
         except Exception as e:
             print(f"❌ Помилка при завантаженні чатів: {e}")
 
+    async def get_known_chat(self, chat_id) -> Chat | None:
+        """The chat as registered: from the cache while it's subscribed,
+        from the DB after /stop; None if it never ran /start (or the DB
+        can't be read)."""
+        chat_id = str(chat_id)
+        async with self._chats_lock:
+            chat = self.chats.get(chat_id)
+        if chat is not None:
+            return chat
+        try:
+            return await asyncio.to_thread(self._chat_repository.get, chat_id)
+        except Exception as e:
+            print(f"❌ Не вдалося прочитати чат {chat_id}: {e}")
+            return None
+
     async def register_chat_db(self, chat_id: str, chat_name: str, chat_type: str = "private", message_thread_id: int | None = None):
         """Register chat in DB and add to memory."""
         try:

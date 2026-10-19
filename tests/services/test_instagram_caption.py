@@ -49,3 +49,22 @@ def test_build_caption_truncates_long_text_but_keeps_extras():
 
 def test_build_caption_without_text_is_just_the_tags():
     assert build_caption("", EXTRA) == " ".join(EXTRA)
+
+
+def test_normalize_hashtag():
+    from app.services.instagram_caption import normalize_hashtag
+
+    assert normalize_hashtag("#Команда_AniKoe") == "#Команда_AniKoe"
+    assert normalize_hashtag(" аніме ") == "#аніме"
+    assert normalize_hashtag("#два слова") is None
+    assert normalize_hashtag("#тег!") is None
+    assert normalize_hashtag("#") is None
+
+
+def test_has_any_hashtag():
+    from app.services.instagram_caption import has_any_hashtag
+
+    assert has_any_hashtag("Пост #instagram_тест", ["#Команда_AniKoe", "#Instagram_Тест"])
+    assert not has_any_hashtag("Пост #аніме", ["#Команда_AniKoe", "#instagram"])
+    assert not has_any_hashtag("Пост #instagram2", ["#instagram"])
+    assert not has_any_hashtag("Пост #instagram", [])

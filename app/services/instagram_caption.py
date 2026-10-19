@@ -10,6 +10,18 @@ MAX_HASHTAGS = 30
 _HASHTAG_RE = re.compile(r"(?<!\w)#\w+")
 
 
+_SINGLE_HASHTAG_RE = re.compile(r"#\w+")
+
+
+def normalize_hashtag(value: str) -> str | None:
+    """`value` as a hashtag (adding the `#` if it's missing), or None if
+    it isn't one (e.g. contains spaces or punctuation)."""
+    value = value.strip()
+    if not value.startswith("#"):
+        value = f"#{value}"
+    return value if _SINGLE_HASHTAG_RE.fullmatch(value) else None
+
+
 def find_hashtags(text: str | None) -> list[str]:
     return _HASHTAG_RE.findall(text or "")
 
@@ -19,6 +31,12 @@ def has_hashtag(text: str | None, hashtag: str) -> bool:
     just a longer tag that starts with it."""
     wanted = hashtag.casefold()
     return any(tag.casefold() == wanted for tag in find_hashtags(text))
+
+
+def has_any_hashtag(text: str | None, hashtags) -> bool:
+    """Whether `text` contains any of `hashtags` (each matched as has_hashtag does)."""
+    wanted = {hashtag.casefold() for hashtag in hashtags}
+    return any(tag.casefold() in wanted for tag in find_hashtags(text))
 
 
 def build_caption(text: str | None, extra_hashtags: list[str]) -> str:

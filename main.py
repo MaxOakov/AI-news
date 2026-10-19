@@ -1,12 +1,13 @@
 import logging
 import asyncio
+from dataclasses import dataclass
 from datetime import timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from app import config
 from app.config import (
     TELEGRAM_TOKEN, MONGODB_URL, GEMINI_MODEL, GEMINI_MODEL_OPTIONS, ENV_PATH, MAX_ARTICLE_AGE_HOURS,
+    SECRETS_ENCRYPTION_KEY, INSTAGRAM_GRAPH_API_VERSION,
 )
 from app.db.database import Database
 from app.db.article_repository import ArticleRepository
@@ -14,58 +15,54 @@ from app.db.chat_repository import ChatRepository
 from app.db.rss_link_repository import RssLinkRepository
 from app.db.prompt_repository import PromptRepository
 from app.db.instagram_post_repository import InstagramPostRepository
+from app.db.instagram_settings_repository import InstagramSettingsRepository
 from app.services.rss_service import RssFeedService
 from app.services.news_generator import NewsGenerator
 from app.services.model_settings import GeminiModelSettings
 from app.services.publisher import ArticlePublisher, REVIEW_CALLBACK_PREFIX
-from app.services.image_host import R2ImageHost, make_r2_client
-from app.services.instagram_client import InstagramClient
+from app.services.secret_box import SecretBox
+from app.services.instagram_settings import InstagramSettingsService
+from app.services.instagram_connector import InstagramConnector
 from app.services.page_image import PageImageFetcher
 from app.instagram_forwarder import InstagramForwarder
 from app.telegram_bot import TelegramBot
 from app.news_pipeline import NewsPipeline
 from app.scheduler import SchedulerService
 from app.bot_commands import BotCommands, SET_MODEL_CALLBACK_PREFIX
+from app.setup_commands import SetupCommands, SETUP_DEEP_LINK_PREFIX
 
 logging.basicConfig(level=logging.INFO)
-
-# Без цих налаштувань перенесення постів в Instagram вимкнене.
-_INSTAGRAM_REQUIRED_SETTINGS = (
-    "INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_USER_ID", "INSTAGRAM_SOURCE_CHAT_ID",
-    "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "R2_PUBLIC_BASE_URL",
-)
+# httpx logs every request's full URL at INFO: Telegram's carry the bot token
+# (api.telegram.org/bot<token>/...), Graph API ones an access_token parameter.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-def build_instagram_forwarder(database, telegram_bot):
-    """The Telegram → Instagram forwarder, or None if it isn't configured."""
-    missing = [name for name in _INSTAGRAM_REQUIRED_SETTINGS if not getattr(config, name)]
-    if missing:
-        print(f"ℹ️ Перенесення в Instagram вимкнене, не задано: {', '.join(missing)}")
+@dataclass
+class App:
+    telegram_bot: TelegramBot
+    scheduler_service: SchedulerService
+    bot_commands: BotCommands
+    setup_commands: SetupCommands
+    article_repository: ArticleRepository
+    instagram_settings: InstagramSettingsService
+    instagram_forwarder: InstagramForwarder
+
+
+def build_secret_box(key: str | None) -> SecretBox | None:
+    """The box Instagram/R2 secrets are encrypted with, or None (Instagram
+    then can't be set up, but the rest of the bot works as usual)."""
+    try:
+        secret_box = SecretBox.from_env(key)
+    except ValueError:
+        print("❌ SECRETS_ENCRYPTION_KEY некоректний — Instagram недоступний, доки його не виправлено.")
         return None
-
-    image_host = R2ImageHost(
-        make_r2_client(config.R2_ACCOUNT_ID, config.R2_ACCESS_KEY_ID, config.R2_SECRET_ACCESS_KEY),
-        config.R2_BUCKET,
-        config.R2_PUBLIC_BASE_URL,
-    )
-    instagram_client = InstagramClient(
-        config.INSTAGRAM_USER_ID, config.INSTAGRAM_ACCESS_TOKEN, config.INSTAGRAM_API_BASE_URL
-    )
-    return InstagramForwarder(
-        source_chat_id=config.INSTAGRAM_SOURCE_CHAT_ID,
-        source_thread_id=config.INSTAGRAM_SOURCE_THREAD_ID,
-        trigger_hashtag=config.INSTAGRAM_TRIGGER_HASHTAG,
-        extra_hashtags=config.INSTAGRAM_EXTRA_HASHTAGS,
-        post_repository=InstagramPostRepository(database),
-        image_host=image_host,
-        instagram_client=instagram_client,
-        page_image_fetcher=PageImageFetcher(),
-        telegram_bot=telegram_bot,
-        notify_chat_id=config.INSTAGRAM_NOTIFY_CHAT_ID,
-    )
+    if secret_box is None:
+        print("ℹ️ SECRETS_ENCRYPTION_KEY не задано — Instagram у чатах налаштувати не вийде.")
+    return secret_box
 
 
-def build_app():
+def build_app() -> App:
     """Composition root: construct the full object graph explicitly.
 
     Every class in the app takes its dependencies through its constructor
@@ -85,17 +82,33 @@ def build_app():
 
     telegram_bot = TelegramBot(token=TELEGRAM_TOKEN, chat_repository=chat_repository)
 
-    instagram_forwarder = build_instagram_forwarder(database, telegram_bot)
+    instagram_settings = InstagramSettingsService(
+        InstagramSettingsRepository(database, build_secret_box(SECRETS_ENCRYPTION_KEY))
+    )
+    instagram_connector = InstagramConnector(INSTAGRAM_GRAPH_API_VERSION)
+    instagram_forwarder = InstagramForwarder(
+        instagram_settings, InstagramPostRepository(database), instagram_connector, PageImageFetcher(), telegram_bot
+    )
     publisher = ArticlePublisher(article_repository, news_generator, telegram_bot, instagram_forwarder)
 
     news_pipeline = NewsPipeline(rss_feed_service, news_generator, article_repository, telegram_bot, publisher)
     scheduler_service = SchedulerService(news_pipeline)
 
+    setup_commands = SetupCommands(telegram_bot, rss_link_repository, instagram_settings, instagram_connector)
     bot_commands = BotCommands(
-        telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings, publisher
+        telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings, publisher,
+        setup_commands,
     )
 
-    return telegram_bot, scheduler_service, bot_commands, article_repository, instagram_forwarder
+    return App(
+        telegram_bot=telegram_bot,
+        scheduler_service=scheduler_service,
+        bot_commands=bot_commands,
+        setup_commands=setup_commands,
+        article_repository=article_repository,
+        instagram_settings=instagram_settings,
+        instagram_forwarder=instagram_forwarder,
+    )
 
 
 async def main():
@@ -103,26 +116,38 @@ async def main():
     if not TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_TOKEN is not configured.")
 
-    telegram_bot, scheduler_service, bot_commands, article_repository, instagram_forwarder = build_app()
+    app = build_app()
+    telegram_bot, scheduler_service, bot_commands = app.telegram_bot, app.scheduler_service, app.bot_commands
+    setup_commands = app.setup_commands
 
     # Created once at startup. A failure here shouldn't stop the bot: every
     # query still works without the indexes, just more slowly.
-    try:
-        await asyncio.to_thread(article_repository.ensure_indexes)
-    except Exception as e:
-        print(f"⚠️ Не вдалося створити індекси: {e}")
-    if instagram_forwarder is not None:
+    for ensure_indexes in (
+        app.article_repository.ensure_indexes,
+        app.instagram_forwarder.ensure_indexes,
+        app.instagram_settings.ensure_indexes,
+    ):
         try:
-            await asyncio.to_thread(instagram_forwarder.ensure_indexes)
+            await asyncio.to_thread(ensure_indexes)
         except Exception as e:
-            print(f"⚠️ Не вдалося створити індекси для Instagram: {e}")
+            print(f"⚠️ Не вдалося створити індекси: {e}")
 
     # Load chats from DB
     await telegram_bot.load_chats_from_db()
     print(f"📋 Активні чати: {telegram_bot.chats}")
+    try:
+        await app.instagram_settings.load()
+    except Exception as e:
+        print(f"⚠️ Не вдалося завантажити налаштування Instagram: {e}")
 
     # Setup Telegram bot handlers
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    # Before the plain /start: the deep link from a group's /setup button
+    # opens setup in the private chat instead of subscribing it to news.
+    application.add_handler(CommandHandler(
+        'start', setup_commands.start_from_link,
+        filters=filters.ChatType.PRIVATE & filters.Regex(f"^/start {SETUP_DEEP_LINK_PREFIX}"),
+    ))
     application.add_handler(CommandHandler('start', bot_commands.start))
     application.add_handler(CommandHandler('runjob', bot_commands.run_job_now))
     application.add_handler(CommandHandler('news', bot_commands.run_job_now))
@@ -143,12 +168,19 @@ async def main():
     application.add_handler(CallbackQueryHandler(
         bot_commands.review_callback, pattern=f"^{REVIEW_CALLBACK_PREFIX}"
     ))
-    if instagram_forwarder is not None:
-        # Окрема група: повідомлення гілки перевіряються незалежно від команд.
-        application.add_handler(MessageHandler(
-            filters.Chat(chat_id=int(config.INSTAGRAM_SOURCE_CHAT_ID)) & ~filters.UpdateType.EDITED,
-            instagram_forwarder.handle,
-        ), group=1)
+    application.add_handler(CommandHandler('setup', setup_commands.setup))
+    application.add_handler(CommandHandler('ig_account', setup_commands.ig_account))
+    application.add_handler(CommandHandler('ig_r2', setup_commands.ig_r2))
+    application.add_handler(CommandHandler('ig_track', setup_commands.ig_track))
+    application.add_handler(CommandHandler('ig_tags', setup_commands.ig_tags))
+    application.add_handler(CommandHandler('ig_topic', setup_commands.ig_topic))
+    application.add_handler(CommandHandler('ig_reset', setup_commands.ig_reset))
+    # Окрема група: повідомлення чатів перевіряються незалежно від команд;
+    # forwarder сам відкидає чати, де Instagram не налаштовано.
+    application.add_handler(MessageHandler(
+        (filters.ChatType.GROUPS | filters.ChatType.CHANNEL) & ~filters.UpdateType.EDITED,
+        app.instagram_forwarder.handle,
+    ), group=1)
 
     async def run_scheduler_background():
         """Run scheduler in background without blocking."""

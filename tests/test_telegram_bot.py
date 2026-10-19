@@ -276,3 +276,26 @@ async def test_start_after_stop_keeps_reviewer_via_db_fallback(telegram_bot):
     await telegram_bot.register_chat_db("1", "Chat", "group")
 
     assert telegram_bot.chats["1"].reviewer_chat_id == "7"
+
+
+# --------------------------------------------------------------------------
+# get_known_chat
+# --------------------------------------------------------------------------
+async def test_get_known_chat_from_cache_db_or_none(telegram_bot):
+    await telegram_bot.register_chat_db("1", "Active", "group", message_thread_id=5)
+    await telegram_bot.register_chat_db("2", "Stopped", "group")
+    await telegram_bot.deactivate_chat_db("2")
+
+    assert (await telegram_bot.get_known_chat(1)).message_thread_id == 5
+    stopped = await telegram_bot.get_known_chat("2")
+    assert stopped.chat_name == "Stopped" and stopped.is_active is False
+    assert await telegram_bot.get_known_chat("3") is None
+
+
+async def test_get_known_chat_db_error_is_treated_as_unknown(telegram_bot, monkeypatch):
+    def boom(chat_id):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(telegram_bot._chat_repository, "get", boom)
+
+    assert await telegram_bot.get_known_chat("9") is None

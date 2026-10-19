@@ -15,6 +15,7 @@ from app.db.article_repository import ArticleRepository
 from app.db.chat_repository import ChatRepository
 from app.db.database import Database
 from app.db.instagram_post_repository import InstagramPostRepository
+from app.db.instagram_settings_repository import InstagramSettingsRepository
 from app.db.prompt_repository import PromptRepository
 from app.db.rss_link_repository import RssLinkRepository
 from app.models import Article, Chat
@@ -23,10 +24,14 @@ from app.scheduler import SchedulerService
 from app.services.model_settings import GeminiModelSettings
 from app.services.news_generator import NewsGenerator
 from app.services.publisher import ArticlePublisher
+from app.services.instagram_settings import InstagramSettingsService
 from app.services.rss_service import RssFeedService
+from app.services.secret_box import SecretBox, generate_key
+from app.setup_commands import SetupCommands
 from app.telegram_bot import TelegramBot
 
 from tests.fakes.genai import FakeGenAIClient
+from tests.fakes.instagram import FakeConnector
 from tests.fakes.mongo import FakeCollection
 from tests.fakes.telegram import FakeTGBot, make_context, make_update
 
@@ -91,6 +96,7 @@ def fake_db_handle():
         rss_links=FakeCollection(),
         chat_prompts=FakeCollection(),
         instagram_posts=FakeCollection(),
+        instagram_settings=FakeCollection(),
     )
 
 
@@ -124,6 +130,26 @@ def prompt_repository(database):
 @pytest.fixture
 def instagram_post_repository(database):
     return InstagramPostRepository(database)
+
+
+@pytest.fixture
+def secret_box():
+    return SecretBox([generate_key()])
+
+
+@pytest.fixture
+def instagram_settings_repository(database, secret_box):
+    return InstagramSettingsRepository(database, secret_box)
+
+
+@pytest.fixture
+def instagram_settings(instagram_settings_repository):
+    return InstagramSettingsService(instagram_settings_repository)
+
+
+@pytest.fixture
+def fake_connector():
+    return FakeConnector()
 
 
 # --------------------------------------------------------------------------
@@ -219,3 +245,8 @@ def bot_commands(telegram_bot, scheduler_service, rss_link_repository, prompt_re
     return BotCommands(
         telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings, publisher
     )
+
+
+@pytest.fixture
+def setup_commands(telegram_bot, rss_link_repository, instagram_settings, fake_connector):
+    return SetupCommands(telegram_bot, rss_link_repository, instagram_settings, fake_connector)

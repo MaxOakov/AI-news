@@ -1,77 +1,70 @@
+import pytest
+
 from app.bot_commands import BotCommands
 from app.instagram_forwarder import InstagramForwarder
 from app.scheduler import SchedulerService
+from app.services.secret_box import generate_key
+from app.setup_commands import SetupCommands
 from app.telegram_bot import TelegramBot
 
 
-def test_build_app_returns_wired_object_graph(monkeypatch):
+@pytest.fixture
+def main_module(monkeypatch):
     monkeypatch.setattr("main.TELEGRAM_TOKEN", "")
     monkeypatch.setattr("main.MONGODB_URL", None)
     monkeypatch.setattr("main.GEMINI_MODEL", "fake-model")
+    monkeypatch.setattr("main.SECRETS_ENCRYPTION_KEY", generate_key())
     monkeypatch.setattr("app.services.news_generator.genai.Client", lambda: object())
 
     import main
 
-    telegram_bot, scheduler_service, bot_commands, article_repository, instagram_forwarder = main.build_app()
+    return main
+
+
+def test_build_app_returns_wired_object_graph(main_module):
+    app = main_module.build_app()
+    telegram_bot, scheduler_service, bot_commands = app.telegram_bot, app.scheduler_service, app.bot_commands
 
     assert isinstance(telegram_bot, TelegramBot)
     assert isinstance(scheduler_service, SchedulerService)
     assert isinstance(bot_commands, BotCommands)
+    assert isinstance(app.setup_commands, SetupCommands)
+    assert isinstance(app.instagram_forwarder, InstagramForwarder)
 
     # composition-root wiring: everyone shares the exact same instances
     assert scheduler_service._pipeline._telegram_bot is telegram_bot
     assert bot_commands._telegram_bot is telegram_bot
     assert bot_commands._scheduler_service is scheduler_service
-    assert scheduler_service._pipeline._articles is article_repository
+    assert scheduler_service._pipeline._articles is app.article_repository
     assert scheduler_service._pipeline._publisher is bot_commands._publisher
-    assert article_repository._max_article_age is not None  # queue age limit is wired in
+    assert app.article_repository._max_article_age is not None  # queue age limit is wired in
+
+    # Instagram: one settings service shared by the commands that change it
+    # and the forwarder that reads it; the publisher hands posts to the forwarder.
+    assert bot_commands._setup_commands is app.setup_commands
+    assert app.setup_commands._settings is app.instagram_settings
+    assert app.instagram_forwarder._settings is app.instagram_settings
+    assert app.setup_commands._connector is app.instagram_forwarder._connector
+    assert bot_commands._publisher._instagram_forwarder is app.instagram_forwarder
+    assert app.instagram_forwarder._telegram_bot is telegram_bot
+    assert app.instagram_settings.can_store_secrets is True
 
 
-def test_build_app_does_not_connect_to_mongo_when_url_missing(monkeypatch):
-    monkeypatch.setattr("main.TELEGRAM_TOKEN", "")
-    monkeypatch.setattr("main.MONGODB_URL", None)
-    monkeypatch.setattr("main.GEMINI_MODEL", "fake-model")
-    monkeypatch.setattr("app.services.news_generator.genai.Client", lambda: object())
-
-    import main
-
+def test_build_app_does_not_connect_to_mongo_when_url_missing(main_module):
     # Must not raise: Database.get_db() is lazy and never called during
     # construction, only when a repository method actually runs.
-    main.build_app()
+    main_module.build_app()
 
 
-def test_build_app_without_instagram_settings_has_no_forwarder(monkeypatch):
-    monkeypatch.setattr("main.TELEGRAM_TOKEN", "")
-    monkeypatch.setattr("main.MONGODB_URL", None)
-    monkeypatch.setattr("main.GEMINI_MODEL", "fake-model")
-    monkeypatch.setattr("app.services.news_generator.genai.Client", lambda: object())
-    monkeypatch.setattr("app.config.INSTAGRAM_ACCESS_TOKEN", None)
+@pytest.mark.parametrize("key", [None, "", "not-a-fernet-key"])
+def test_missing_or_bad_encryption_key_leaves_the_bot_working(main_module, monkeypatch, key):
+    monkeypatch.setattr("main.SECRETS_ENCRYPTION_KEY", key)
 
-    import main
+    app = main_module.build_app()
 
-    assert main.build_app()[4] is None
+    assert app.instagram_settings.can_store_secrets is False
+    assert isinstance(app.bot_commands, BotCommands)
 
 
-def test_build_app_wires_instagram_forwarder_when_configured(monkeypatch):
-    monkeypatch.setattr("main.TELEGRAM_TOKEN", "")
-    monkeypatch.setattr("main.MONGODB_URL", None)
-    monkeypatch.setattr("main.GEMINI_MODEL", "fake-model")
-    monkeypatch.setattr("app.services.news_generator.genai.Client", lambda: object())
-    for name in (
-        "INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_USER_ID", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
-        "R2_SECRET_ACCESS_KEY", "R2_BUCKET",
-    ):
-        monkeypatch.setattr(f"app.config.{name}", "x")
-    monkeypatch.setattr("app.config.INSTAGRAM_SOURCE_CHAT_ID", "-1001")
-    monkeypatch.setattr("app.config.INSTAGRAM_SOURCE_THREAD_ID", 7)
-    monkeypatch.setattr("app.config.R2_PUBLIC_BASE_URL", "https://pub.example")
-
-    import main
-
-    telegram_bot, _, bot_commands, _, instagram_forwarder = main.build_app()
-
-    assert isinstance(instagram_forwarder, InstagramForwarder)
-    assert instagram_forwarder._telegram_bot is telegram_bot
-    assert instagram_forwarder._source_chat_id == "-1001"
-    assert instagram_forwarder._source_thread_id == 7
-    assert bot_commands._publisher._instagram_forwarder is instagram_forwarder
+def test_secret_box_accepts_several_keys_for_rotation(main_module):
+    assert main_module.build_secret_box(f"{generate_key()}, {generate_key()}") is not None

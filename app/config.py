@@ -25,34 +25,13 @@ GEMINI_MODEL_OPTIONS = [
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
-def _optional_int(name: str) -> int | None:
-    value = os.getenv(name, "").strip()
-    return int(value) if value else None
-
-
 # ----------------- Instagram -----------------
-# Бот стежить за гілкою форуму і переносить в Instagram пости з фото,
-# що містять INSTAGRAM_TRIGGER_HASHTAG. Функція вимкнена, доки не задані
-# токен, id акаунта, джерело та налаштування Cloudflare R2.
-INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
-INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID")
-# graph.facebook.com — для акаунта, прив'язаного до сторінки Facebook;
-# https://graph.instagram.com/<версія> — для входу через Instagram Login.
-INSTAGRAM_API_BASE_URL = os.getenv("INSTAGRAM_API_BASE_URL", "https://graph.facebook.com/v23.0")
-# id форум-групи (наприклад -1001234567890) і гілки в ній
-INSTAGRAM_SOURCE_CHAT_ID = os.getenv("INSTAGRAM_SOURCE_CHAT_ID")
-INSTAGRAM_SOURCE_THREAD_ID = _optional_int("INSTAGRAM_SOURCE_THREAD_ID")
-INSTAGRAM_TRIGGER_HASHTAG = os.getenv("INSTAGRAM_TRIGGER_HASHTAG", "#Команда_AniKoe")
-INSTAGRAM_EXTRA_HASHTAGS = os.getenv(
-    "INSTAGRAM_EXTRA_HASHTAGS", "#аніме #анімеукраїнською #анімеукраїна #українаніме #анімеоналайн"
-).split()
-# Куди писати про невдалі публікації (необов'язково)
-INSTAGRAM_NOTIFY_CHAT_ID = os.getenv("INSTAGRAM_NOTIFY_CHAT_ID")
-
-# Cloudflare R2: Instagram приймає лише публічний URL картинки, тож фото
-# спершу завантажується в бакет з публічним доступом (r2.dev або свій домен).
-R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
-R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
-R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
-R2_BUCKET = os.getenv("R2_BUCKET")
-R2_PUBLIC_BASE_URL = os.getenv("R2_PUBLIC_BASE_URL")  # напр. https://pub-xxxx.r2.dev
+# Instagram і Cloudflare R2 налаштовуються для кожного чату окремо (/setup)
+# і зберігаються в MongoDB, а токени й ключі — зашифрованими цим ключем.
+# Він живе лише тут, не в базі: без нього вкрадена копія бази нічого не дає.
+# Без ключа Instagram недоступний, а решта бота працює як звичайно.
+# Згенерувати: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Кілька ключів через кому — для ротації: шифрує перший, розшифровують усі.
+# Якщо ключ втратити, токени й ключі доведеться ввести в чатах заново.
+SECRETS_ENCRYPTION_KEY = os.getenv("SECRETS_ENCRYPTION_KEY")
+INSTAGRAM_GRAPH_API_VERSION = os.getenv("INSTAGRAM_GRAPH_API_VERSION", "v23.0")

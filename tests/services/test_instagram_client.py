@@ -127,3 +127,29 @@ async def test_network_errors_are_retried_then_reported():
 async def test_rejects_empty_photo_list():
     with pytest.raises(ValueError):
         await _client(FakeGraphApi()).publish_photos([], "x")
+
+
+async def test_get_username():
+    def handler(request):
+        assert request.method == "GET"
+        assert request.url.path == "/v23.0/ig-user"
+        return httpx.Response(200, json={"username": "anikoe", "id": "ig-user"})
+
+    http = make_http_client(transport=httpx.MockTransport(handler))
+
+    assert await InstagramClient("ig-user", "t", BASE, http_client=http).get_username() == "anikoe"
+
+
+async def test_get_username_reports_invalid_token():
+    api = FakeGraphApi()
+    api.fail_with = (400, {"error": {"message": "Error validating access token: The session is invalid", "code": 190}})
+
+    with pytest.raises(InstagramError, match="Error validating access token"):
+        await _client(api).get_username()
+
+
+async def test_get_username_without_username_fails():
+    http = make_http_client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"id": "1"})))
+
+    with pytest.raises(InstagramError):
+        await InstagramClient("ig-user", "t", BASE, http_client=http).get_username()

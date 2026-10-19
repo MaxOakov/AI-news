@@ -1,6 +1,7 @@
 # Прямі залежності застосунку. requirements.txt генерується з цього файлу:
 #   pip-compile --strip-extras --no-emit-index-url requirements.in
 boto3  # завантаження фото в Cloudflare R2 (S3-сумісний API) для Instagram
+cryptography  # шифрування токенів Instagram і ключів R2, що зберігаються в MongoDB
 feedparser
 google-genai
 httpx  # завантаження RSS з таймаутом (feedparser сам таймаутів не має)

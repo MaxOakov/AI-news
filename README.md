@@ -10,7 +10,8 @@ A Telegram bot that turns RSS feeds into fan-style news posts. It fetches articl
 - **Scheduler** — runs once on startup, then every hour during active hours (08:00–22:00 Europe/Kyiv by default), skipping overlapping runs and retrying on transient (503) errors.
 - **Forum topic support** — a chat can pin news delivery to a specific forum topic via `/settopic`.
 - **Duplicate protection** — new entries are matched by the feed's own entry id (falling back to its link, then its title), so a minor title edit or a repost doesn't slip past, and articles already sent to a chat aren't sent again (tracked in MongoDB).
-- **Telegram → Instagram** — posts with a trigger hashtag (`#Команда_AniKoe` by default) in a watched forum topic, including the bot's own news posts, are republished to Instagram with their photo or link-preview picture and extra hashtags (see [Instagram](#instagram)).
+- **Telegram → Instagram (optional, per chat)** — each chat can connect its own Instagram account and R2 bucket; its posts with any of the chat's tracked hashtags, from the topic it picks (by default the news topic), including the bot's own news posts, are republished there with their photo or link-preview picture and the chat's extra hashtags. Tokens and keys are stored encrypted (see [Instagram](#instagram)).
+- **Setup checklist** — `/setup` (and the first `/start` in a chat) shows what's configured, with ✅/❌ for each item.
 - **Persistence** — chats, RSS links, custom prompts, and sent/unsent articles are stored in MongoDB, so state survives restarts.
 
 ## Architecture
@@ -25,17 +26,25 @@ app/
 │   ├── article_repository.py
 │   ├── chat_repository.py
 │   ├── rss_link_repository.py
-│   └── prompt_repository.py
-├── models/                # Article, Chat dataclasses
+│   ├── prompt_repository.py
+│   ├── instagram_settings_repository.py  # Per-chat Instagram settings (secrets encrypted)
+│   └── instagram_post_repository.py      # Which posts went to Instagram
+├── models/                # Article, Chat, InstagramSettings dataclasses
 ├── services/
 │   ├── rss_service.py      # Fetches & stores new RSS entries
 │   ├── news_generator.py   # Rewrites articles via Gemini
 │   ├── instagram_client.py # Instagram Graph API publishing
 │   ├── instagram_caption.py, image_prep.py, image_host.py  # caption, JPEG prep, R2 upload
 │   ├── page_image.py       # Picture behind a link (image, og:image, first <img>)
+│   ├── secret_box.py       # Encryption of stored secrets
+│   ├── instagram_settings.py   # Per-chat settings + index of set-up chats
+│   └── instagram_connector.py  # Per-chat clients, credential checks
 ├── telegram_bot.py         # Sends messages, tracks registered chats
 ├── bot_commands.py         # Telegram command handlers
-├── instagram_forwarder.py  # Forum topic → Instagram
+├── setup_commands.py       # /setup checklist and Instagram setup commands
+├── setup_checklist.py      # Checklist text
+├── permissions.py          # Chat-admin checks
+├── instagram_forwarder.py  # Chat posts → Instagram
 ├── news_pipeline.py        # Orchestrates one fetch → generate → send run
 ├── scheduler.py            # Hourly scheduling + retry logic
 └── retry.py                # Shared sync/async retry decorators
@@ -76,7 +85,8 @@ app/
    | `TELEGRAM_TOKEN` | Yes | Bot token from BotFather |
    | `MONGODB_URL` | Yes | MongoDB connection string (database name used: `news`) |
    | `MAX_ARTICLE_AGE_HOURS` | No | Unsent articles published longer ago than this are never posted (defaults to `12`) |
-| `INSTAGRAM_*`, `R2_*` | No | Telegram → Instagram forwarding, see [Instagram](#instagram) |
+   | `SECRETS_ENCRYPTION_KEY` | Only for Instagram | Key the chats' Instagram tokens and R2 keys are encrypted with in MongoDB, see [Instagram](#instagram) |
+   | `INSTAGRAM_GRAPH_API_VERSION` | No | Graph API version (defaults to `v23.0`) |
 
 3. **(Optional) customize the default prompt**
 
@@ -102,7 +112,8 @@ Add the bot to a Telegram chat/channel (as admin, if it's a channel) and registe
 
 | Command | Description |
 |---|---|
-| `/start` | Register the current chat with the bot |
+| `/start` | Register the current chat with the bot (the first time, also shows the setup checklist) |
+| `/setup` | Setup checklist: news (subscription, RSS feeds, topic) and Instagram, ✅/❌ per item (admin-only in groups) |
 | `/help` | List available commands |
 | `/runjob`, `/news` | Trigger a news run immediately, for this chat only |
 | `/listfeeds` | List RSS feeds registered for this chat |
@@ -137,37 +148,52 @@ Once a draft is handled, its buttons are replaced with the outcome, so handled d
 
 ## Instagram
 
-The bot can watch one forum topic and republish its posts to Instagram. A post is taken when its text/caption contains `INSTAGRAM_TRIGGER_HASHTAG`; the caption is the post's text (the trigger tag stays in it, HTML formatting is dropped, a link becomes `label (URL)`) followed by `INSTAGRAM_EXTRA_HASHTAGS`. The picture is:
+Optional, and set up per chat: each chat can connect its own Instagram account and Cloudflare R2 bucket, and choose its own hashtags. Without it the bot's Telegram news works as usual.
+
+In a chat where Instagram is set up, a post goes to Instagram when its text/caption contains **any of the chat's tracked hashtags** (`/ig_track`), so posts meant for Instagram can be marked apart from the rest. Posts are taken from the chat's **Instagram topic** (`/ig_topic`): by default the topic its news go to (`/settopic`), or the whole chat if it has none; or one chosen topic; or every topic. This applies to the bot's own news posts too: with a different topic chosen, they stay out of Instagram. Either way, only while the chat is subscribed (`/start`). The caption is the post's text (the tracked tags stay in it, HTML formatting is dropped, a link becomes `label (URL)`) followed by the chat's **extra hashtags**. The picture is:
 
 - a post's own photos (an album becomes a carousel of up to 10);
 - for a text post with a link, the link's picture, like Telegram's link preview: the linked image itself, else the page's `og:image`, else `twitter:image`, else its first `<img>`;
 - for the bot's own news posts (Telegram never delivers a bot's own messages back to it, so these are handed over right after sending), the same picture as their link preview: the RSS entry's image, else the article page's.
 
-Posts with a video/GIF, and posts with neither a photo nor a link, are skipped for now. Each post is published at most once (tracked in the `instagram_posts` collection); a failed one is not retried automatically.
+Posts with a video/GIF, and posts with neither a photo nor a link, are skipped for now. Each post is published at most once (tracked in the `instagram_posts` collection); a failed one is not retried automatically. The admin who connected the account gets a private message about each published or failed post.
 
-Instagram's Graph API only accepts images by public URL, so photos are converted to JPEG (padded to Instagram's 4:5–1.91:1 aspect range), uploaded to a public Cloudflare R2 bucket, and deleted from it after publishing.
+Instagram's Graph API only accepts images by public URL, so photos are converted to JPEG (padded to Instagram's 4:5–1.91:1 aspect range), uploaded to the chat's public R2 bucket, and deleted from it after publishing.
 
-Setup:
+### Setting it up
 
-1. Make the Instagram account a professional (Business/Creator) one, create a Meta app with the `instagram_content_publish` permission, and get a long-lived access token (a System User token doesn't expire; a user token lasts 60 days) and the account's Instagram user id.
-2. Create an R2 bucket, enable public access (r2.dev subdomain or a custom domain), and create an API token with Object Read & Write on it.
-3. Add the bot to the forum group as an **administrator** (or disable its privacy mode in BotFather), otherwise it doesn't see ordinary messages.
-4. Set in `.env`:
+Once, on the server: generate an encryption key and put it in `.env` as `SECRETS_ENCRYPTION_KEY`:
 
-| Variable | Required | Description |
-|---|---|---|
-| `INSTAGRAM_ACCESS_TOKEN` | Yes | Graph API access token |
-| `INSTAGRAM_USER_ID` | Yes | Instagram professional account id |
-| `INSTAGRAM_SOURCE_CHAT_ID` | Yes | Forum group id, e.g. `-1001234567890` |
-| `INSTAGRAM_SOURCE_THREAD_ID` | No | Topic id inside it (unset = every topic) |
-| `INSTAGRAM_TRIGGER_HASHTAG` | No | Defaults to `#Команда_AniKoe` |
-| `INSTAGRAM_EXTRA_HASHTAGS` | No | Space-separated; defaults to `#аніме #анімеукраїнською #анімеукраїна #українаніме #анімеоналайн` |
-| `INSTAGRAM_NOTIFY_CHAT_ID` | No | Chat that gets a message about each published/failed post |
-| `INSTAGRAM_API_BASE_URL` | No | Defaults to `https://graph.facebook.com/v23.0`; use `https://graph.instagram.com/<version>` with Instagram Login tokens |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | Yes | R2 bucket and API token |
-| `R2_PUBLIC_BASE_URL` | Yes | Public URL of the bucket, e.g. `https://pub-xxxx.r2.dev` |
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
 
-Forwarding is off (with a log line naming what's missing) until every required variable is set.
+Then, per chat:
+
+1. Make the Instagram account a professional (Business/Creator) one, create a Meta app with the `instagram_content_publish` permission, and get a long-lived access token and the account's Instagram user id. Prefer a **System User** token (Meta Business Suite → Business settings → System users): it doesn't expire and doesn't stop working when someone logs out of Facebook, unlike a user token. Tokens from Facebook Login and from Instagram Login both work; the bot finds the right Graph API host itself.
+2. Create an R2 bucket, enable public access (r2.dev subdomain or a custom domain), and create an R2 API token with Object Read & Write on it.
+3. Make the bot an **administrator** of the group (or disable its privacy mode in BotFather), otherwise it doesn't see ordinary messages; to delete a key posted to the group by mistake, it also needs the right to delete messages.
+4. In the group, an admin runs `/setup` and presses **🔐 Налаштувати Instagram**. That opens a private chat with the bot for this group (the bot checks you're its admin, and what you send there applies to this group for the next hour), where you send:
+
+| Command | Description |
+|---|---|
+| `/ig_account <Instagram user id> <access token>` | Connect the account. The token is checked against the Graph API before it's saved |
+| `/ig_r2 <Account ID> <Access Key ID> <Secret Access Key> <bucket> <public URL>` | Connect the bucket. It's checked by uploading a file and fetching it back through the public URL, as Instagram will |
+| `/ig_track <hashtags…>` | Posts with any of these hashtags go to Instagram (`/ig_track off` — none, which turns Instagram off) |
+| `/ig_tags <hashtags…>` | Hashtags added at the end of each caption (`/ig_tags off` — none) |
+| `/ig_topic all` \| `news` | Take posts from every topic, or (the default) from the news topic |
+| `/ig_reset` | Delete all of the chat's Instagram settings, token and keys included |
+
+To take posts from one particular topic, send `/ig_topic` (no arguments) **inside that topic** in the group: the topic comes from the message, since Telegram shows users no topic ids. `/ig_track`, `/ig_tags`, `/ig_topic` and `/ig_reset` all work in the group itself (admins only); hashtag lists may be separated by spaces or commas, and the `#` may be left out. A private chat that gets news itself is set up directly in it.
+
+### How secrets are protected
+
+- **Encrypted at rest.** The Instagram token and the R2 Access Key ID and Secret are encrypted (Fernet: AES-128 + HMAC-SHA256) before they're written to MongoDB, under `SECRETS_ENCRYPTION_KEY`, which lives only in `.env`, never in the database: a leaked database dump or backup alone reveals nothing. Each value is bound to its chat and field, so a ciphertext copied into another chat's settings doesn't decrypt. Settings live in their own collection (`instagram_settings`), apart from chat records.
+- **Only entered privately.** Secret commands are refused in groups; if a key is posted there anyway, the bot deletes the message (when it can) and warns to revoke the key. In the private chat, the message carrying a secret is deleted right after it's read.
+- **Never shown or logged.** Checklists and replies show the account name and bucket, never a token or key; settings objects leave secrets out of their `repr`; errors are reported from the API's own messages. httpx request logging is turned down, since it would otherwise write every request URL — including the Telegram bot token — to the log.
+- **Key rotation.** `SECRETS_ENCRYPTION_KEY` may hold several comma-separated keys: the first encrypts, all of them decrypt; values are re-encrypted with the first key the next time they're saved. If the key is lost, the chats' tokens and keys have to be entered again (`/setup` shows ❌ for them).
+
+Without `SECRETS_ENCRYPTION_KEY`, the checklist says so and tokens and keys can't be saved; the rest of the bot is unaffected.
 
 ## Custom Prompts
 

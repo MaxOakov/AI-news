@@ -53,3 +53,7 @@ class Database:
     @property
     def instagram_posts(self):
         return self.get_db().instagram_posts
+
+    @property
+    def instagram_settings(self):
+        return self.get_db().instagram_settings

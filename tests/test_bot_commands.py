@@ -677,3 +677,48 @@ async def test_moderation_db_failure_is_reported(bot_commands, telegram_bot, cha
     await bot_commands.moderation(update, make_context(args=[mode], bot=fake_tg_bot))
 
     assert reply in update.message.replies[0]
+
+
+# --------------------------------------------------------------------------
+# start — the setup checklist after a chat's first /start
+# --------------------------------------------------------------------------
+@pytest.fixture
+def bot_commands_with_setup(
+    telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings, publisher, setup_commands
+):
+    from app.bot_commands import BotCommands
+
+    return BotCommands(
+        telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings, publisher,
+        setup_commands,
+    )
+
+
+async def test_first_start_shows_the_setup_checklist(bot_commands_with_setup, fake_tg_bot):
+    update = make_update(chat_id="-1001", chat_type="supergroup", title="AniKoe")
+
+    await bot_commands_with_setup.start(update, make_context(bot=fake_tg_bot))
+
+    welcome, checklist = update.message.replies
+    assert "AniKoe" in welcome
+    assert "Налаштування чату «AniKoe»" in checklist
+    assert "Instagram (необов'язково)" in checklist
+    assert update.message.reply_markups[1] is not None  # the private-setup button
+
+
+async def test_later_start_does_not_repeat_the_checklist(bot_commands_with_setup, telegram_bot, fake_tg_bot):
+    await telegram_bot.register_chat_db("-1001", "AniKoe", "supergroup")
+    await telegram_bot.deactivate_chat_db("-1001")  # even after /stop: the chat isn't new
+
+    update = make_update(chat_id="-1001", chat_type="supergroup", title="AniKoe")
+    await bot_commands_with_setup.start(update, make_context(bot=fake_tg_bot))
+
+    assert len(update.message.replies) == 1
+
+
+async def test_help_lists_setup_and_instagram_commands(bot_commands):
+    update = make_update()
+    await bot_commands.show_help(update, make_context())
+
+    for command in ("/setup", "/ig_account", "/ig_r2", "/ig_track", "/ig_tags", "/ig_topic", "/ig_reset"):
+        assert command in update.message.replies[0]

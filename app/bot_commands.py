@@ -6,12 +6,11 @@ from telegram.ext import ContextTypes
 
 from app.db.prompt_repository import InvalidPromptError, PromptRepository
 from app.db.rss_link_repository import RssLinkRepository
+from app.permissions import require_admin
 from app.scheduler import SchedulerService
 from app.services.model_settings import GeminiModelSettings
 from app.services.publisher import REVIEW_CALLBACK_PREFIX, ArticlePublisher, review_done_keyboard
 from app.telegram_bot import TelegramBot
-
-_ADMIN_STATUSES = {"creator", "administrator"}
 
 SET_MODEL_CALLBACK_PREFIX = "set_model:"
 
@@ -37,6 +36,7 @@ class BotCommands:
         prompt_repository: PromptRepository,
         model_settings: GeminiModelSettings,
         publisher: ArticlePublisher,
+        setup_commands=None,
     ):
         self._telegram_bot = telegram_bot
         self._scheduler_service = scheduler_service
@@ -44,39 +44,12 @@ class BotCommands:
         self._prompts = prompt_repository
         self._model_settings = model_settings
         self._publisher = publisher
+        # SetupCommands: shows the setup checklist after a chat's first /start.
+        self._setup_commands = setup_commands
 
     async def _require_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-        """Return True if the sender may run a state-changing command here.
-
-        Always True in private chats (the sender is the only member).
-        In groups/supergroups, only the chat's creator/administrators (or
-        an anonymous-admin post, which Telegram sends with no
-        effective_user but a message.sender_chat matching the chat itself)
-        may proceed; anyone else gets a warning reply and False.
-        """
-        chat = update.effective_chat
-        if chat is None:
-            return False
-        if chat.type == "private":
-            return True
-
-        message = update.message
-        sender_chat = getattr(message, "sender_chat", None) if message is not None else None
-        if sender_chat is not None and sender_chat.id == chat.id:
-            return True  # anonymous admin post
-
-        user = update.effective_user
-        if user is not None:
-            try:
-                member = await context.bot.get_chat_member(chat.id, user.id)
-                if member.status in _ADMIN_STATUSES:
-                    return True
-            except Exception as e:
-                print(f"⚠️ Не вдалося перевірити права адміністратора: {e}")
-
-        if message is not None:
-            await message.reply_text("⛔ Ця команда доступна лише адміністраторам чату.")
-        return False
+        """See app.permissions.require_admin."""
+        return await require_admin(update, context)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start - register chat in DB."""
@@ -88,9 +61,12 @@ class BotCommands:
         chat_type = update.effective_chat.type
         message_thread_id = update.message.message_thread_id if update.message is not None else None
 
-        await self._telegram_bot.register_chat_db(chat_id, chat_name, chat_type, message_thread_id)
+        is_new = await self._telegram_bot.get_known_chat(chat_id) is None
+        registered = await self._telegram_bot.register_chat_db(chat_id, chat_name, chat_type, message_thread_id)
         if update.message is not None:
             await update.message.reply_text(f"✅ Привіт! Я зареєстрований для чату: {chat_name}")
+            if registered and is_new and self._setup_commands is not None:
+                await self._setup_commands.send_first_start_checklist(update, context)
 
     async def run_job_now(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Instantly trigger the news job for this chat only."""
@@ -429,6 +405,7 @@ class BotCommands:
         help_text = (
             "📖 Доступні команди:\n\n"
             "/start — зареєструвати цей чат у боті\n"
+            "/setup — чекліст налаштувань чату: новини та Instagram (у групах — лише адміністраторам)\n"
             "/help — показати список команд\n"
             "/runjob — негайно запустити обробку новин\n"
             "/news — те саме, що /runjob\n"
@@ -443,6 +420,15 @@ class BotCommands:
             "/resetprompt — повернути використання стандартного prompt.txt\n"
             "/moderation on|off — надсилати новини спершу вам в особисті на перевірку "
             "(✅ опублікувати / 🔄 перегенерувати / ❌ пропустити) або публікувати одразу\n"
-            "/stop — відписати цей чат від новин"
+            "/stop — відписати цей чат від новин\n"
+            "\nInstagram (необов'язково, лише адміністраторам). Токен і ключі вводяться тільки "
+            "в особистих повідомленнях боту — туди веде кнопка з /setup:\n"
+            "/ig_account <ID акаунта> <токен> — підключити акаунт Instagram\n"
+            "/ig_r2 <Account ID> <Access Key ID> <Secret Access Key> <бакет> <публічний URL> — сховище Cloudflare R2\n"
+            "/ig_track <хештеги> — пости з будь-яким із цих хештегів підуть в Instagram\n"
+            "/ig_tags <хештеги> — додавати їх у кінець підпису (/ig_tags off — не додавати)\n"
+            "/ig_topic — надіслана в гілці форуму: брати пости для Instagram лише з неї "
+            "(/ig_topic all — з усього чату, /ig_topic news — з гілки новин)\n"
+            "/ig_reset — видалити всі налаштування Instagram цього чату"
         )
         await update.message.reply_text(help_text)

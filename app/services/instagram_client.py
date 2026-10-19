@@ -42,6 +42,14 @@ class InstagramClient:
         self._poll_interval = poll_interval
         self._poll_timeout = poll_timeout
 
+    async def get_username(self) -> str:
+        """The account's username; doubles as a check that the token works
+        for this account."""
+        result = await self._request("GET", None, {"fields": "username"})
+        if not result.get("username"):
+            raise InstagramError("Instagram не повернув ім'я акаунта")
+        return result["username"]
+
     async def publish_photos(self, image_urls: list[str], caption: str) -> str:
         """Publish one photo, or a carousel of 2–10, and return the new
         post's Instagram media id."""

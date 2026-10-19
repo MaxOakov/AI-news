@@ -16,8 +16,11 @@ class FakeTGBot:
     context.bot for BotCommands' admin-status checks (get_chat_member).
     """
 
+    username = "test_news_bot"
+
     def __init__(self):
         self.sent: list[dict] = []
+        self.chat_titles: dict[str, str] = {}
         self._attempts = 0
         self._fail_times = 0
         self._exception_factory = lambda: RuntimeError("simulated Telegram failure")
@@ -38,9 +41,10 @@ class FakeTGBot:
             raise self._exception_factory()
         self.sent.append(payload)
 
-    def make_admin(self, user_id, status="administrator"):
-        """Mark a user id as an admin (or "creator") for get_chat_member."""
-        self._admins.add((user_id, status))
+    def make_admin(self, user_id, status="administrator", chat_id=None):
+        """Mark a user id as an admin (or "creator") for get_chat_member:
+        of every chat, or only of `chat_id` if given."""
+        self._admins.add((user_id, status, None if chat_id is None else str(chat_id)))
 
     def fail_admin_check(self):
         """Make get_chat_member raise, simulating a Bot API error."""
@@ -49,10 +53,16 @@ class FakeTGBot:
     async def get_chat_member(self, chat_id, user_id):
         if self._admin_check_fails:
             raise RuntimeError("simulated get_chat_member failure")
-        for admin_id, status in self._admins:
-            if admin_id == user_id:
+        for admin_id, status, admin_chat_id in self._admins:
+            if admin_id == user_id and admin_chat_id in (None, str(chat_id)):
                 return SimpleNamespace(status=status)
         return SimpleNamespace(status="member")
+
+    async def get_chat(self, chat_id):
+        """A chat titled `chat_titles[chat_id]`; an unknown one fails like the Bot API."""
+        if str(chat_id) not in self.chat_titles:
+            raise RuntimeError("chat not found")
+        return SimpleNamespace(id=chat_id, title=self.chat_titles[str(chat_id)], first_name=None)
 
 
     async def get_file(self, file_id):
@@ -70,17 +80,32 @@ class FakeFile:
 
 
 class FakeMessage:
-    """Stand-in for telegram.Message, recording every reply_text call."""
+    """Stand-in for telegram.Message, recording every reply_text call
+    (and whether it was deleted)."""
 
-    def __init__(self, message_thread_id=None, sender_chat_id=None):
+    def __init__(self, message_thread_id=None, sender_chat_id=None, is_topic_message=None, topic_name=None):
         self.message_thread_id = message_thread_id
+        # Like Telegram: sent in a forum topic iff it has a thread id, unless
+        # told otherwise (a reply thread in a non-forum group also has one).
+        self.is_topic_message = message_thread_id is not None if is_topic_message is None else is_topic_message
+        # A message sent straight into a topic replies to the topic's creation message.
+        self.reply_to_message = (
+            SimpleNamespace(forum_topic_created=SimpleNamespace(name=topic_name)) if topic_name else None
+        )
         self.sender_chat = SimpleNamespace(id=sender_chat_id) if sender_chat_id is not None else None
         self.replies: list[str] = []
         self.reply_markups: list = []
+        self.deleted = False
+        self.delete_fails = False
 
     async def reply_text(self, text, *args, **kwargs):
         self.replies.append(text)
         self.reply_markups.append(kwargs.get("reply_markup"))
+
+    async def delete(self):
+        if self.delete_fails:
+            raise RuntimeError("simulated: not enough rights to delete")
+        self.deleted = True
 
 
 class FakeCallbackQuery:
@@ -118,6 +143,8 @@ def make_update(
     has_message=True,
     sender_chat_id=None,
     callback_data=None,
+    is_topic_message=None,
+    topic_name=None,
 ):
     """Build a duck-typed stand-in for telegram.Update.
 
@@ -134,7 +161,12 @@ def make_update(
         SimpleNamespace(id=user_id, first_name=first_name) if first_name is not None else None
     )
     message = (
-        FakeMessage(message_thread_id=message_thread_id, sender_chat_id=sender_chat_id)
+        FakeMessage(
+            message_thread_id=message_thread_id,
+            sender_chat_id=sender_chat_id,
+            is_topic_message=is_topic_message,
+            topic_name=topic_name,
+        )
         if has_message
         else None
     )

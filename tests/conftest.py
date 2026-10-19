@@ -14,6 +14,7 @@ from app.bot_commands import BotCommands
 from app.db.article_repository import ArticleRepository
 from app.db.chat_repository import ChatRepository
 from app.db.database import Database
+from app.db.instagram_post_repository import InstagramPostRepository
 from app.db.prompt_repository import PromptRepository
 from app.db.rss_link_repository import RssLinkRepository
 from app.models import Article, Chat
@@ -75,6 +76,8 @@ def no_sleep(monkeypatch):
     monkeypatch.setattr("app.retry.time", _FakeTimeModule())
     monkeypatch.setattr("app.retry.asyncio", _FakeAsyncioModule())
     monkeypatch.setattr("app.scheduler.asyncio", _FakeAsyncioModule())
+    monkeypatch.setattr("app.services.instagram_client.asyncio", _FakeAsyncioModule())
+    monkeypatch.setattr("app.instagram_forwarder.asyncio", _FakeAsyncioModule())
 
 
 # --------------------------------------------------------------------------
@@ -87,6 +90,7 @@ def fake_db_handle():
         chats=FakeCollection(),
         rss_links=FakeCollection(),
         chat_prompts=FakeCollection(),
+        instagram_posts=FakeCollection(),
     )
 
 
@@ -115,6 +119,11 @@ def rss_link_repository(database):
 @pytest.fixture
 def prompt_repository(database):
     return PromptRepository(database)
+
+
+@pytest.fixture
+def instagram_post_repository(database):
+    return InstagramPostRepository(database)
 
 
 # --------------------------------------------------------------------------

@@ -10,6 +10,7 @@ A Telegram bot that turns RSS feeds into fan-style news posts. It fetches articl
 - **Scheduler** — runs once on startup, then every hour during active hours (08:00–22:00 Europe/Kyiv by default), skipping overlapping runs and retrying on transient (503) errors.
 - **Forum topic support** — a chat can pin news delivery to a specific forum topic via `/settopic`.
 - **Duplicate protection** — new entries are matched by the feed's own entry id (falling back to its link, then its title), so a minor title edit or a repost doesn't slip past, and articles already sent to a chat aren't sent again (tracked in MongoDB).
+- **Telegram → Instagram** — photo posts with a trigger hashtag (`#Команда_AniKoe` by default) in a watched forum topic are republished to Instagram with extra hashtags (see [Instagram](#instagram)).
 - **Persistence** — chats, RSS links, custom prompts, and sent/unsent articles are stored in MongoDB, so state survives restarts.
 
 ## Architecture
@@ -28,9 +29,12 @@ app/
 ├── models/                # Article, Chat dataclasses
 ├── services/
 │   ├── rss_service.py      # Fetches & stores new RSS entries
-│   └── news_generator.py   # Rewrites articles via Gemini
+│   ├── news_generator.py   # Rewrites articles via Gemini
+│   ├── instagram_client.py # Instagram Graph API publishing
+│   ├── instagram_caption.py, image_prep.py, image_host.py  # caption, JPEG prep, R2 upload
 ├── telegram_bot.py         # Sends messages, tracks registered chats
 ├── bot_commands.py         # Telegram command handlers
+├── instagram_forwarder.py  # Forum topic → Instagram
 ├── news_pipeline.py        # Orchestrates one fetch → generate → send run
 ├── scheduler.py            # Hourly scheduling + retry logic
 └── retry.py                # Shared sync/async retry decorators
@@ -71,6 +75,7 @@ app/
    | `TELEGRAM_TOKEN` | Yes | Bot token from BotFather |
    | `MONGODB_URL` | Yes | MongoDB connection string (database name used: `news`) |
    | `MAX_ARTICLE_AGE_HOURS` | No | Unsent articles published longer ago than this are never posted (defaults to `12`) |
+| `INSTAGRAM_*`, `R2_*` | No | Telegram → Instagram forwarding, see [Instagram](#instagram) |
 
 3. **(Optional) customize the default prompt**
 
@@ -128,6 +133,34 @@ With `/moderation on`, a chat's news isn't published directly. Each run sends th
 - **❌ Пропустити** drops the article
 
 Once a draft is handled, its buttons are replaced with the outcome, so handled drafts are easy to tell apart. The bot can only message users who have started it, so the admin has to open a private chat with the bot and press **Start** first; `/moderation on` checks this and says so if it can't reach them. It doesn't work for anonymous admins, since they post as the group and there's no private chat to send drafts to. `/moderation off` goes back to publishing directly; drafts already sent can still be handled.
+
+## Instagram
+
+The bot can watch one forum topic and republish its photo posts to Instagram. A post is taken when its text/caption contains `INSTAGRAM_TRIGGER_HASHTAG`; the caption is the post's text (the trigger tag stays in it) followed by `INSTAGRAM_EXTRA_HASHTAGS`. An album becomes a carousel (up to 10 photos). Posts without a photo, or with a video/GIF, are skipped for now. Each post is published at most once (tracked in the `instagram_posts` collection); a failed one is not retried automatically.
+
+Instagram's Graph API only accepts images by public URL, so photos are converted to JPEG (padded to Instagram's 4:5–1.91:1 aspect range), uploaded to a public Cloudflare R2 bucket, and deleted from it after publishing.
+
+Setup:
+
+1. Make the Instagram account a professional (Business/Creator) one, create a Meta app with the `instagram_content_publish` permission, and get a long-lived access token (a System User token doesn't expire; a user token lasts 60 days) and the account's Instagram user id.
+2. Create an R2 bucket, enable public access (r2.dev subdomain or a custom domain), and create an API token with Object Read & Write on it.
+3. Add the bot to the forum group as an **administrator** (or disable its privacy mode in BotFather), otherwise it doesn't see ordinary messages.
+4. Set in `.env`:
+
+| Variable | Required | Description |
+|---|---|---|
+| `INSTAGRAM_ACCESS_TOKEN` | Yes | Graph API access token |
+| `INSTAGRAM_USER_ID` | Yes | Instagram professional account id |
+| `INSTAGRAM_SOURCE_CHAT_ID` | Yes | Forum group id, e.g. `-1001234567890` |
+| `INSTAGRAM_SOURCE_THREAD_ID` | No | Topic id inside it (unset = every topic) |
+| `INSTAGRAM_TRIGGER_HASHTAG` | No | Defaults to `#Команда_AniKoe` |
+| `INSTAGRAM_EXTRA_HASHTAGS` | No | Space-separated; defaults to `#аніме #анімеукраїнською #анімеукраїна #українаніме #анімеоналайн` |
+| `INSTAGRAM_NOTIFY_CHAT_ID` | No | Chat that gets a message about each published/failed post |
+| `INSTAGRAM_API_BASE_URL` | No | Defaults to `https://graph.facebook.com/v23.0`; use `https://graph.instagram.com/<version>` with Instagram Login tokens |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | Yes | R2 bucket and API token |
+| `R2_PUBLIC_BASE_URL` | Yes | Public URL of the bucket, e.g. `https://pub-xxxx.r2.dev` |
+
+Forwarding is off (with a log line naming what's missing) until every required variable is set.
 
 ## Custom Prompts
 

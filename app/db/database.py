@@ -49,3 +49,7 @@ class Database:
     @property
     def chat_prompts(self):
         return self.get_db().chat_prompts
+
+    @property
+    def instagram_posts(self):
+        return self.get_db().instagram_posts

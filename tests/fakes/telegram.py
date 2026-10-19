@@ -23,6 +23,8 @@ class FakeTGBot:
         self._exception_factory = lambda: RuntimeError("simulated Telegram failure")
         self._admins: set = set()
         self._admin_check_fails = False
+        self.files: dict[str, bytes] = {}
+        self.downloaded: list[str] = []
 
     def fail_times(self, n: int, exc: Exception | None = None):
         """Make the next `n` send_message attempts raise before any later one succeeds."""
@@ -51,6 +53,20 @@ class FakeTGBot:
             if admin_id == user_id:
                 return SimpleNamespace(status=status)
         return SimpleNamespace(status="member")
+
+
+    async def get_file(self, file_id):
+        """Return a stand-in telegram.File; its contents are `files[file_id]`."""
+        self.downloaded.append(file_id)
+        return FakeFile(self.files[file_id])
+
+
+class FakeFile:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    async def download_as_bytearray(self):
+        return bytearray(self._data)
 
 
 class FakeMessage:

@@ -1,28 +1,57 @@
 """Taking posts from a Telegram forum topic to Instagram.
 
-Every message in the watched chat/topic passes through `handle`; a post is
-published to Instagram when its text contains the trigger hashtag and it
-has photos. Posts with a video (or GIF) are skipped for now, as are posts
-without a photo.
+A post goes to Instagram when its text contains the trigger hashtag and
+there's a picture for it. Posts with a video (or GIF) are skipped for now.
+The picture is, in order:
+
+- the post's own photos (an album becomes a carousel);
+- for a text post, the picture of its link preview: the linked image
+  itself, or the linked page's og:image (see PageImageFetcher).
+
+Telegram never delivers a bot's own messages to it as updates, so the news
+posts this bot publishes don't come through `handle`. ArticlePublisher
+hands them over via `forward_article` instead, right after sending one,
+with the same picture its link preview shows (Article.preview_url).
 
 Telegram delivers an album as one update per item, sharing a
 media_group_id, with the caption on just one of them. So album items are
-collected for `album_wait` seconds and then handled as one post (an
-Instagram carousel).
+collected for `album_wait` seconds and then handled as one post.
 
-The work runs in background tasks, so a slow upload or Instagram's
-processing never holds up the bot's other updates.
+The work runs in background tasks, so a slow download or Instagram's
+processing never holds up the bot's other updates or the news run.
 """
 import asyncio
 import html
 import uuid
+from collections.abc import Awaitable, Callable
 
 from app.db.instagram_post_repository import InstagramPostRepository
+from app.models import Article
 from app.services.image_host import R2ImageHost
 from app.services.image_prep import prepare_for_instagram
 from app.services.instagram_caption import build_caption, has_hashtag
 from app.services.instagram_client import MAX_CAROUSEL_ITEMS, InstagramClient
-from app.telegram_bot import TelegramBot
+from app.services.page_image import PageImageFetcher
+from app.telegram_bot import TelegramBot, html_to_plain_text
+
+ImageLoader = Callable[[], Awaitable[bytes]]
+
+
+def _link_preview_url(message) -> str | None:
+    """The URL a text message's link preview is of: the one set explicitly
+    for the preview, else the message's first link (as Telegram picks it)."""
+    options = getattr(message, "link_preview_options", None)
+    if options is not None:
+        if options.is_disabled:
+            return None
+        if options.url:
+            return options.url
+    for entity in sorted(message.entities or (), key=lambda e: e.offset):
+        if entity.type == "text_link":
+            return entity.url
+        if entity.type == "url":
+            return message.parse_entity(entity)
+    return None
 
 
 class InstagramForwarder:
@@ -35,6 +64,7 @@ class InstagramForwarder:
         post_repository: InstagramPostRepository,
         image_host: R2ImageHost,
         instagram_client: InstagramClient,
+        page_image_fetcher: PageImageFetcher,
         telegram_bot: TelegramBot | None = None,
         notify_chat_id: str | None = None,
         album_wait: float = 3,
@@ -46,6 +76,7 @@ class InstagramForwarder:
         self._posts = post_repository
         self._image_host = image_host
         self._instagram = instagram_client
+        self._page_images = page_image_fetcher
         self._telegram_bot = telegram_bot
         self._notify_chat_id = notify_chat_id
         self._album_wait = album_wait
@@ -57,7 +88,7 @@ class InstagramForwarder:
 
     async def handle(self, update, context):
         message = update.effective_message
-        if message is None or not self._is_from_source(message):
+        if message is None or not self._is_source(message.chat.id, message.message_thread_id):
             return
 
         if message.media_group_id:
@@ -69,17 +100,39 @@ class InstagramForwarder:
             else:
                 album.append(message)
         else:
-            self._spawn(self._process([message], context.bot))
+            self._spawn(self._process_messages([message], context.bot))
+
+    def forward_article(self, chat_id, message_thread_id, article: Article, text: str):
+        """Take a news post this bot just sent (`text`, as HTML) to
+        Instagram, if it went to the watched topic and has the trigger
+        hashtag. Returns at once; the work runs in the background."""
+        if not self._is_source(chat_id, message_thread_id):
+            return
+        text = html_to_plain_text(text)
+        if not has_hashtag(text, self._trigger_hashtag):
+            return
+        url = article.preview_url
+        if not url:
+            print(f"⏭ Стаття '{article.title}' без картинки — в Instagram не переносимо.")
+            return
+        self._spawn(self._run(
+            str(chat_id), f"article:{article.id}", [lambda: self._page_images.fetch_image(url)], text
+        ))
 
     async def wait_idle(self):
         """Wait until every post handled so far is done (for tests and shutdown)."""
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
-    def _is_from_source(self, message) -> bool:
-        if str(message.chat.id) != self._source_chat_id:
+    def _is_source(self, chat_id, message_thread_id) -> bool:
+        if str(chat_id) != self._source_chat_id:
             return False
-        return self._source_thread_id is None or message.message_thread_id == self._source_thread_id
+        if self._source_thread_id is None:
+            return True
+        try:
+            return int(message_thread_id) == self._source_thread_id
+        except (TypeError, ValueError):
+            return False
 
     def _spawn(self, coro):
         task = asyncio.create_task(coro)
@@ -88,12 +141,11 @@ class InstagramForwarder:
 
     async def _flush_album(self, key, bot):
         await asyncio.sleep(self._album_wait)
-        await self._process(self._albums.pop(key), bot)
+        await self._process_messages(self._albums.pop(key), bot)
 
-    async def _process(self, messages: list, bot):
+    async def _process_messages(self, messages: list, bot):
         messages = sorted(messages, key=lambda m: m.message_id)
         first = messages[0]
-        chat_id = str(first.chat.id)
         post_key = str(first.media_group_id or first.message_id)
         text = next((m.caption or m.text for m in messages if m.caption or m.text), "")
 
@@ -102,11 +154,24 @@ class InstagramForwarder:
         if any(m.video or m.animation or m.video_note for m in messages):
             print(f"⏭ Пост {post_key} містить відео — в Instagram поки не переносимо.")
             return
+
         photos = [m.photo[-1] for m in messages if m.photo][:MAX_CAROUSEL_ITEMS]
-        if not photos:
-            print(f"⏭ Пост {post_key} без фото — в Instagram не переносимо.")
+        if photos:
+            loaders = [lambda p=photo: self._download_telegram_photo(bot, p) for photo in photos]
+        elif (url := _link_preview_url(first)) is not None:
+            loaders = [lambda: self._page_images.fetch_image(url)]
+        else:
+            print(f"⏭ Пост {post_key} без фото і без посилання — в Instagram не переносимо.")
             return
 
+        await self._run(str(first.chat.id), post_key, loaders, text)
+
+    @staticmethod
+    async def _download_telegram_photo(bot, photo) -> bytes:
+        file = await bot.get_file(photo.file_id)
+        return bytes(await file.download_as_bytearray())
+
+    async def _run(self, chat_id: str, post_key: str, loaders: list[ImageLoader], text: str):
         try:
             claimed = await asyncio.to_thread(self._posts.claim, chat_id, post_key)
         except Exception as exc:
@@ -117,7 +182,7 @@ class InstagramForwarder:
             return
 
         try:
-            media_id = await self._publish(chat_id, post_key, photos, build_caption(text, self._extra_hashtags), bot)
+            media_id = await self._publish(chat_id, post_key, loaders, build_caption(text, self._extra_hashtags))
         except Exception as exc:
             print(f"❌ Не вдалося опублікувати пост {post_key} в Instagram: {exc}")
             await self._record(self._posts.mark_failed, chat_id, post_key, str(exc))
@@ -128,16 +193,15 @@ class InstagramForwarder:
         await self._record(self._posts.mark_published, chat_id, post_key, media_id)
         await self._notify(f"📸 Пост {post_key} опубліковано в Instagram.")
 
-    async def _publish(self, chat_id, post_key, photos, caption, bot) -> str:
+    async def _publish(self, chat_id, post_key, loaders: list[ImageLoader], caption) -> str:
         keys = []
         try:
             urls = []
-            for index, photo in enumerate(photos):
-                file = await bot.get_file(photo.file_id)
-                data = bytes(await file.download_as_bytearray())
-                jpeg = await asyncio.to_thread(prepare_for_instagram, data)
+            for index, load in enumerate(loaders):
+                jpeg = await asyncio.to_thread(prepare_for_instagram, await load())
                 # Random suffix: the bucket is public, so keys shouldn't be guessable.
-                key = f"instagram/{chat_id}/{post_key}-{index}-{uuid.uuid4().hex}.jpg"
+                safe_key = post_key.replace(":", "-")
+                key = f"instagram/{chat_id}/{safe_key}-{index}-{uuid.uuid4().hex}.jpg"
                 urls.append(await asyncio.to_thread(self._image_host.upload, key, jpeg))
                 keys.append(key)
             return await self._instagram.publish_photos(urls, caption)

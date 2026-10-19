@@ -257,3 +257,59 @@ async def test_review_regenerate_send_failure_keeps_buttons(
 
     assert result.done is False
     assert _doc(article_repository, drafted)["draft_text"] == "Draft text"
+
+
+# --------------------------------------------------------------------------
+# Instagram hand-over
+# --------------------------------------------------------------------------
+@pytest.fixture
+def forwarder():
+    from tests.fakes.instagram import FakeForwarder
+
+    return FakeForwarder()
+
+
+@pytest.fixture
+def instagram_publisher(article_repository, news_generator, telegram_bot, forwarder):
+    from app.services.publisher import ArticlePublisher
+
+    return ArticlePublisher(article_repository, news_generator, telegram_bot, forwarder)
+
+
+async def test_published_post_is_handed_to_instagram_forwarder(instagram_publisher, chat, article_repository, forwarder):
+    article = _stored_article(article_repository)
+
+    await instagram_publisher.publish("123", chat, article, "Post text")
+
+    assert forwarder.forwarded == [("123", 7, article, "Post text")]
+
+
+async def test_draft_is_not_handed_over_until_approved(
+    instagram_publisher, moderated_chat, article_repository, forwarder
+):
+    article = _stored_article(article_repository)
+
+    await instagram_publisher.publish("123", moderated_chat, article, "Draft text")
+    assert forwarder.forwarded == []
+
+    await instagram_publisher.handle_review(ACTION_PUBLISH, str(article.id), REVIEWER)
+    assert [(c, t) for c, _, _, t in forwarder.forwarded] == [("123", "Draft text")]
+
+
+async def test_failed_send_is_not_handed_over(instagram_publisher, chat, article_repository, forwarder, fake_tg_bot):
+    fake_tg_bot.fail_times(10)
+    article = _stored_article(article_repository)
+
+    await instagram_publisher.publish("123", chat, article, "Post text")
+
+    assert forwarder.forwarded == []
+
+
+async def test_forwarder_error_does_not_break_publishing(instagram_publisher, chat, article_repository, forwarder):
+    def boom(*args):
+        raise RuntimeError("boom")
+
+    forwarder.forward_article = boom
+    article = _stored_article(article_repository)
+
+    assert await instagram_publisher.publish("123", chat, article, "Post text") is True

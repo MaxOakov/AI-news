@@ -5,7 +5,8 @@ import pytest
 from PIL import Image
 
 from app.instagram_forwarder import InstagramForwarder
-from tests.fakes.instagram import FakeImageHost, FakeInstagramClient
+from app.models import Article
+from tests.fakes.instagram import FakeImageHost, FakeInstagramClient, FakePageImageFetcher
 from tests.fakes.telegram import make_context
 
 SOURCE_CHAT = "-1001"
@@ -29,9 +30,12 @@ def make_post(
     chat_id=SOURCE_CHAT,
     thread_id=SOURCE_THREAD,
     video=None,
+    entities=(),
+    link_preview_options=None,
 ):
     """Duck-typed telegram.Message with only what the forwarder reads."""
     sizes = [SimpleNamespace(file_id=f"small-{message_id}"), SimpleNamespace(file_id=f"big-{message_id}")]
+    body = text or ""
     message = SimpleNamespace(
         message_id=message_id,
         chat=SimpleNamespace(id=int(chat_id)),
@@ -43,8 +47,16 @@ def make_post(
         video=video,
         animation=None,
         video_note=None,
+        entities=list(entities),
+        link_preview_options=link_preview_options,
+        # Plain slicing: tests only use ASCII before a link (real offsets are UTF-16).
+        parse_entity=lambda e: body[e.offset:e.offset + e.length],
     )
     return SimpleNamespace(effective_message=message)
+
+
+def url_entity(text, url):
+    return SimpleNamespace(type="url", offset=text.index(url), length=len(url), url=None)
 
 
 @pytest.fixture
@@ -58,7 +70,15 @@ def instagram():
 
 
 @pytest.fixture
-def forwarder(instagram_post_repository, image_host, instagram, telegram_bot):
+def page_images():
+    return FakePageImageFetcher({
+        "https://news.example/a": _png(1200, 630),
+        "https://img.example/pic.jpg": _png(800, 800),
+    })
+
+
+@pytest.fixture
+def forwarder(instagram_post_repository, image_host, instagram, page_images, telegram_bot):
     return InstagramForwarder(
         source_chat_id=SOURCE_CHAT,
         source_thread_id=SOURCE_THREAD,
@@ -67,6 +87,7 @@ def forwarder(instagram_post_repository, image_host, instagram, telegram_bot):
         post_repository=instagram_post_repository,
         image_host=image_host,
         instagram_client=instagram,
+        page_image_fetcher=page_images,
         telegram_bot=telegram_bot,
         notify_chat_id="555",
         album_wait=0,
@@ -129,11 +150,142 @@ async def test_any_topic_when_thread_not_configured(forwarder, context, instagra
     assert len(instagram.published) == 1
 
 
-async def test_skips_text_only_post(forwarder, context, instagram, fake_db_handle):
+async def test_skips_text_post_without_link(forwarder, context, instagram, fake_db_handle):
     await _handle(forwarder, context, make_post(1, text=f"Анонс {TRIGGER}", photo=False))
 
     assert instagram.published == []
     assert fake_db_handle.instagram_posts.docs == []
+
+
+async def test_text_post_uses_picture_of_its_first_link(forwarder, context, instagram, page_images):
+    text = f"News https://news.example/a and https://other.example {TRIGGER}"
+    entities = [url_entity(text, "https://other.example"), url_entity(text, "https://news.example/a")]
+
+    await _handle(forwarder, context, make_post(1, text=text, photo=False, entities=entities))
+
+    assert page_images.fetched == ["https://news.example/a"]
+    [post] = instagram.published
+    assert len(post["image_urls"]) == 1
+    assert post["caption"].startswith(text)
+
+
+async def test_text_link_entity_counts_as_link(forwarder, context, instagram, page_images):
+    text = f"Read more {TRIGGER}"
+    entity = SimpleNamespace(type="text_link", offset=0, length=4, url="https://img.example/pic.jpg")
+
+    await _handle(forwarder, context, make_post(1, text=text, photo=False, entities=[entity]))
+
+    assert page_images.fetched == ["https://img.example/pic.jpg"]
+    assert len(instagram.published) == 1
+
+
+async def test_explicit_link_preview_url_wins(forwarder, context, page_images):
+    text = f"News https://news.example/a {TRIGGER}"
+    options = SimpleNamespace(is_disabled=False, url="https://img.example/pic.jpg")
+
+    await _handle(forwarder, context, make_post(
+        1, text=text, photo=False, entities=[url_entity(text, "https://news.example/a")], link_preview_options=options,
+    ))
+
+    assert page_images.fetched == ["https://img.example/pic.jpg"]
+
+
+async def test_disabled_link_preview_means_no_picture(forwarder, context, instagram, page_images):
+    text = f"News https://news.example/a {TRIGGER}"
+    options = SimpleNamespace(is_disabled=True, url=None)
+
+    await _handle(forwarder, context, make_post(
+        1, text=text, photo=False, entities=[url_entity(text, "https://news.example/a")], link_preview_options=options,
+    ))
+
+    assert page_images.fetched == []
+    assert instagram.published == []
+
+
+async def test_link_without_picture_is_recorded_as_failed(forwarder, context, instagram, fake_db_handle, fake_tg_bot):
+    text = f"News https://nopic.example {TRIGGER}"
+
+    await _handle(forwarder, context, make_post(
+        1, text=text, photo=False, entities=[url_entity(text, "https://nopic.example")]
+    ))
+
+    assert instagram.published == []
+    [doc] = fake_db_handle.instagram_posts.docs
+    assert doc["status"] == "failed"
+    assert "немає картинки" in fake_tg_bot.sent[-1]["text"]
+
+
+# --------------------------------------------------------------------------
+# The bot's own news posts (handed over by ArticlePublisher)
+# --------------------------------------------------------------------------
+def _article(**kwargs):
+    defaults = dict(title="T", url="https://news.example/a", image_url=None, id="art-1")
+    return Article(**{**defaults, **kwargs})
+
+
+async def test_forward_article_publishes_with_preview_picture(forwarder, instagram, page_images, fake_db_handle):
+    html_text = f"<b>Привіт!</b> Новина &amp; <a href='https://news.example/a'>джерело</a>\n{TRIGGER}"
+
+    forwarder.forward_article(SOURCE_CHAT, SOURCE_THREAD, _article(image_url="https://img.example/pic.jpg"), html_text)
+    await forwarder.wait_idle()
+
+    assert page_images.fetched == ["https://img.example/pic.jpg"]
+    [post] = instagram.published
+    assert post["caption"] == (
+        f"Привіт! Новина & джерело (https://news.example/a)\n{TRIGGER}\n\n" + " ".join(EXTRA)
+    )
+    [doc] = fake_db_handle.instagram_posts.docs
+    assert doc["post_key"] == "article:art-1" and doc["status"] == "published"
+
+
+async def test_forward_article_falls_back_to_article_page(forwarder, instagram, page_images):
+    forwarder.forward_article(SOURCE_CHAT, SOURCE_THREAD, _article(), f"Текст {TRIGGER}")
+    await forwarder.wait_idle()
+
+    assert page_images.fetched == ["https://news.example/a"]
+    assert len(instagram.published) == 1
+
+
+@pytest.mark.parametrize(
+    "chat_id, thread_id, text",
+    [
+        ("-1002", SOURCE_THREAD, f"Текст {TRIGGER}"),
+        (SOURCE_CHAT, 8, f"Текст {TRIGGER}"),
+        (SOURCE_CHAT, None, f"Текст {TRIGGER}"),
+        (SOURCE_CHAT, SOURCE_THREAD, "Текст без тегу"),
+    ],
+)
+async def test_forward_article_ignores_other_topics_and_untagged_posts(
+    forwarder, instagram, page_images, chat_id, thread_id, text
+):
+    forwarder.forward_article(chat_id, thread_id, _article(), text)
+    await forwarder.wait_idle()
+
+    assert page_images.fetched == []
+    assert instagram.published == []
+
+
+async def test_forward_article_accepts_thread_id_as_string(forwarder, instagram):
+    forwarder.forward_article(SOURCE_CHAT, str(SOURCE_THREAD), _article(), f"Текст {TRIGGER}")
+    await forwarder.wait_idle()
+
+    assert len(instagram.published) == 1
+
+
+async def test_forward_article_without_any_url_is_skipped(forwarder, instagram, page_images):
+    forwarder.forward_article(SOURCE_CHAT, SOURCE_THREAD, _article(url=""), f"Текст {TRIGGER}")
+    await forwarder.wait_idle()
+
+    assert page_images.fetched == []
+    assert instagram.published == []
+
+
+async def test_same_article_is_not_forwarded_twice(forwarder, instagram):
+    for _ in range(2):
+        forwarder.forward_article(SOURCE_CHAT, SOURCE_THREAD, _article(), f"Текст {TRIGGER}")
+        await forwarder.wait_idle()
+
+    assert len(instagram.published) == 1
 
 
 async def test_skips_video_post(forwarder, context, instagram):

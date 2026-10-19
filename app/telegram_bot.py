@@ -11,7 +11,7 @@ _LINK_RE = re.compile(r"""<a\s[^>]*href=["']([^"']*)["'][^>]*>(.*?)</a>""", re.I
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
-def _html_to_plain_text(text: str) -> str:
+def html_to_plain_text(text: str) -> str:
     """Strip HTML tags for a plain-text resend, keeping each link's URL
     (`<a href='URL'>label</a>` becomes `label (URL)`) so it isn't lost."""
     text = _LINK_RE.sub(lambda m: f"{m.group(2)} ({m.group(1)})", text)
@@ -166,7 +166,7 @@ class TelegramBot:
             # Resending the same markup would fail the same way, so retry
             # once as plain text instead of leaving the article unsent.
             print(f"⚠️ Telegram не прийняв HTML, надсилаємо як звичайний текст: {exc}")
-            payload["text"] = _html_to_plain_text(text)
+            payload["text"] = html_to_plain_text(text)
             payload["parse_mode"] = None
             try:
                 await _send_once(self.bot, payload)

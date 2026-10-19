@@ -57,12 +57,24 @@ class ArticlePublisher:
 
     Every post goes out with a large link preview above the text: the feed
     entry's image if it has one, else the article page.
+
+    With an `instagram_forwarder`, each post published to a chat is also
+    handed to it (it decides whether the post goes to Instagram): Telegram
+    never delivers the bot's own messages back to it, so the forwarder
+    can't pick these up from updates.
     """
 
-    def __init__(self, article_repository: ArticleRepository, news_generator: NewsGenerator, telegram_bot: TelegramBot):
+    def __init__(
+        self,
+        article_repository: ArticleRepository,
+        news_generator: NewsGenerator,
+        telegram_bot: TelegramBot,
+        instagram_forwarder=None,
+    ):
         self._articles = article_repository
         self._news_generator = news_generator
         self._telegram_bot = telegram_bot
+        self._instagram_forwarder = instagram_forwarder
 
     async def publish(self, chat_id: str, chat: Chat, article: Article, text: str) -> bool:
         """Post `text` to the chat, or send it to the chat's reviewer as a
@@ -87,6 +99,11 @@ class ArticlePublisher:
         if sent:
             await asyncio.to_thread(self._articles.mark_as_sent, article.id)
             print(f"📊 Відправлено в чат {chat_id}")
+            if self._instagram_forwarder is not None:
+                try:
+                    self._instagram_forwarder.forward_article(chat_id, chat.message_thread_id, article, text)
+                except Exception as exc:
+                    print(f"⚠️ Не вдалося передати статтю в Instagram: {exc}")
         return sent
 
     async def _send_draft(self, reviewer_chat_id: str, chat: Chat, article: Article, text: str) -> bool:

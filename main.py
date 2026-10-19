@@ -20,6 +20,7 @@ from app.services.model_settings import GeminiModelSettings
 from app.services.publisher import ArticlePublisher, REVIEW_CALLBACK_PREFIX
 from app.services.image_host import R2ImageHost, make_r2_client
 from app.services.instagram_client import InstagramClient
+from app.services.page_image import PageImageFetcher
 from app.instagram_forwarder import InstagramForwarder
 from app.telegram_bot import TelegramBot
 from app.news_pipeline import NewsPipeline
@@ -58,6 +59,7 @@ def build_instagram_forwarder(database, telegram_bot):
         post_repository=InstagramPostRepository(database),
         image_host=image_host,
         instagram_client=instagram_client,
+        page_image_fetcher=PageImageFetcher(),
         telegram_bot=telegram_bot,
         notify_chat_id=config.INSTAGRAM_NOTIFY_CHAT_ID,
     )
@@ -83,7 +85,8 @@ def build_app():
 
     telegram_bot = TelegramBot(token=TELEGRAM_TOKEN, chat_repository=chat_repository)
 
-    publisher = ArticlePublisher(article_repository, news_generator, telegram_bot)
+    instagram_forwarder = build_instagram_forwarder(database, telegram_bot)
+    publisher = ArticlePublisher(article_repository, news_generator, telegram_bot, instagram_forwarder)
 
     news_pipeline = NewsPipeline(rss_feed_service, news_generator, article_repository, telegram_bot, publisher)
     scheduler_service = SchedulerService(news_pipeline)
@@ -91,8 +94,6 @@ def build_app():
     bot_commands = BotCommands(
         telegram_bot, scheduler_service, rss_link_repository, prompt_repository, model_settings, publisher
     )
-
-    instagram_forwarder = build_instagram_forwarder(database, telegram_bot)
 
     return telegram_bot, scheduler_service, bot_commands, article_repository, instagram_forwarder
 

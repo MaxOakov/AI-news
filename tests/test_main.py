@@ -68,9 +68,10 @@ def test_build_app_wires_instagram_forwarder_when_configured(monkeypatch):
 
     import main
 
-    telegram_bot, _, _, _, instagram_forwarder = main.build_app()
+    telegram_bot, _, bot_commands, _, instagram_forwarder = main.build_app()
 
     assert isinstance(instagram_forwarder, InstagramForwarder)
     assert instagram_forwarder._telegram_bot is telegram_bot
     assert instagram_forwarder._source_chat_id == "-1001"
     assert instagram_forwarder._source_thread_id == 7
+    assert bot_commands._publisher._instagram_forwarder is instagram_forwarder

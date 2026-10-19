@@ -10,7 +10,7 @@ A Telegram bot that turns RSS feeds into fan-style news posts. It fetches articl
 - **Scheduler** — runs once on startup, then every hour during active hours (08:00–22:00 Europe/Kyiv by default), skipping overlapping runs and retrying on transient (503) errors.
 - **Forum topic support** — a chat can pin news delivery to a specific forum topic via `/settopic`.
 - **Duplicate protection** — new entries are matched by the feed's own entry id (falling back to its link, then its title), so a minor title edit or a repost doesn't slip past, and articles already sent to a chat aren't sent again (tracked in MongoDB).
-- **Telegram → Instagram** — photo posts with a trigger hashtag (`#Команда_AniKoe` by default) in a watched forum topic are republished to Instagram with extra hashtags (see [Instagram](#instagram)).
+- **Telegram → Instagram** — posts with a trigger hashtag (`#Команда_AniKoe` by default) in a watched forum topic, including the bot's own news posts, are republished to Instagram with their photo or link-preview picture and extra hashtags (see [Instagram](#instagram)).
 - **Persistence** — chats, RSS links, custom prompts, and sent/unsent articles are stored in MongoDB, so state survives restarts.
 
 ## Architecture
@@ -32,6 +32,7 @@ app/
 │   ├── news_generator.py   # Rewrites articles via Gemini
 │   ├── instagram_client.py # Instagram Graph API publishing
 │   ├── instagram_caption.py, image_prep.py, image_host.py  # caption, JPEG prep, R2 upload
+│   ├── page_image.py       # Picture behind a link (image, og:image, first <img>)
 ├── telegram_bot.py         # Sends messages, tracks registered chats
 ├── bot_commands.py         # Telegram command handlers
 ├── instagram_forwarder.py  # Forum topic → Instagram
@@ -136,7 +137,13 @@ Once a draft is handled, its buttons are replaced with the outcome, so handled d
 
 ## Instagram
 
-The bot can watch one forum topic and republish its photo posts to Instagram. A post is taken when its text/caption contains `INSTAGRAM_TRIGGER_HASHTAG`; the caption is the post's text (the trigger tag stays in it) followed by `INSTAGRAM_EXTRA_HASHTAGS`. An album becomes a carousel (up to 10 photos). Posts without a photo, or with a video/GIF, are skipped for now. Each post is published at most once (tracked in the `instagram_posts` collection); a failed one is not retried automatically.
+The bot can watch one forum topic and republish its posts to Instagram. A post is taken when its text/caption contains `INSTAGRAM_TRIGGER_HASHTAG`; the caption is the post's text (the trigger tag stays in it, HTML formatting is dropped, a link becomes `label (URL)`) followed by `INSTAGRAM_EXTRA_HASHTAGS`. The picture is:
+
+- a post's own photos (an album becomes a carousel of up to 10);
+- for a text post with a link, the link's picture, like Telegram's link preview: the linked image itself, else the page's `og:image`, else `twitter:image`, else its first `<img>`;
+- for the bot's own news posts (Telegram never delivers a bot's own messages back to it, so these are handed over right after sending), the same picture as their link preview: the RSS entry's image, else the article page's.
+
+Posts with a video/GIF, and posts with neither a photo nor a link, are skipped for now. Each post is published at most once (tracked in the `instagram_posts` collection); a failed one is not retried automatically.
 
 Instagram's Graph API only accepts images by public URL, so photos are converted to JPEG (padded to Instagram's 4:5–1.91:1 aspect range), uploaded to a public Cloudflare R2 bucket, and deleted from it after publishing.
 
